@@ -125,6 +125,43 @@ Matrix<T> gramschmidt(const Matrix<T>& X)
     return orthonormal;
 }
 
+// The first freeze_cols column keeps the input values unchanged
+// while the subsequent ones have been orthogonized
+template <typename T>
+Matrix<T> gramschmidt_incremental(const Matrix<T>& X, int freeze_cols)
+{
+    Matrix<T> Y = X;
+    const int cols = Y.cols();
+    const int rows = Y.rows();
+
+    // only handle the vectors after the freeze_cols column
+    for (int i = freeze_cols; i < cols; ++i) {
+        std::vector<T> col_i = Y.col(i); // take out the i-th column
+
+        // project to all columns earlier than it, including the frozen 0... column (i-1)
+        for (int j = 0; j < i; ++j) {
+            const std::vector<T>& col_j = Y.col(j);
+
+            T denom = dot_(col_j, col_j);
+            if (std::abs(denom) < 1e-15)
+                continue;
+
+            T coeff = dot_(col_i, col_j) / denom;
+            add_(col_i, col_j, -coeff);
+        }
+
+        // normalization
+        double nrm = norm_(col_i);
+        if (nrm > 1e-13) {
+            dot_(col_i, T(1.0 / nrm));
+        }
+
+        Y.setCol(i, col_i);
+    }
+
+    return Y;
+}
+
 template <typename Transformer, typename T = double>
 const std::vector<double> davidson_solver(Transformer transformer, const T* diagonal,
     std::size_t n_dim, std::size_t n_roots = 1,
@@ -139,15 +176,26 @@ const std::vector<double> davidson_solver(Transformer transformer, const T* diag
     }
     // initial guess
     Matrix<T> search_space = Matrix<T>::identity(n_dim, start_dim) + 0.01 * Matrix<T>::ones(n_dim, start_dim);
-
+    Matrix<T> Ab_i = Matrix<T>::zero(n_dim, start_dim);
     // start iteration
     for (std::size_t iter = 0; iter < max_iter; ++iter) {
-        auto M = search_space.cols();
-        Matrix<T> orthonormal_subspace = gramschmidt(search_space);
-        Matrix<T> Ab_i = Matrix<T>::zero(n_dim, M);
-        for (std::size_t j = 0; j < M; j++) {
-            auto vec = orthonormal_subspace.col(j);
-            Ab_i.setCol(j, transformer(vec));
+        // project dim
+        auto M = start_dim + iter * n_roots;
+        Matrix<T> orthonormal_subspace;
+        if (iter == 0) {
+            orthonormal_subspace = gramschmidt(search_space);
+            for (std::size_t j = 0; j < start_dim; j++) {
+                auto vec = orthonormal_subspace.col(j);
+                Ab_i.setCol(j, transformer(vec));
+            }
+        }
+        else {
+            Ab_i.conservativeResize(n_dim, M);
+            orthonormal_subspace = gramschmidt_incremental(search_space, M - n_roots);
+            for (std::size_t j = M - n_roots; j < M; j++) {
+                auto vec = orthonormal_subspace.col(j);
+                Ab_i.setCol(j, transformer(vec));
+            }
         }
 
         Matrix<double> B = orthonormal_subspace.transpose().conjugate() * Ab_i;
@@ -191,102 +239,6 @@ const std::vector<double> davidson_solver(Transformer transformer, const T* diag
                 [](auto c) { return c; })) {
             fmt::println("davidson diagonalization converged in {:>2} iterations",
                 iter + 1);
-            return theta_n;
-        }
-    }
-    throw std::runtime_error("Davidson diagonalization failed");
-}
-
-// The vector corresponding to the convergent root is not updated in each round
-// maybe it is not friendly to a lower limit of convergence
-template <typename Transformer, typename T = double>
-const std::vector<double> davidson_solver_improved(Transformer transformer, const T* diagonal,
-    std::size_t n_dim, std::size_t n_roots = 1,
-    std::size_t start_dim = 5,
-    std::size_t max_iter = 100,
-    double residue_tol = 1e-6)
-{
-
-    if (start_dim < n_roots) {
-        throw std::runtime_error(
-            "start_dim should be greater than or equal to n_roots");
-    }
-    // initial guess
-    Matrix<T> search_space = Matrix<T>::identity(n_dim, start_dim) + 0.01 * Matrix<T>::ones(n_dim, start_dim);
-
-    // start iteration
-    for (std::size_t iter = 0; iter < max_iter; ++iter) {
-        auto M = search_space.cols();
-        Matrix<T> orthonormal_subspace = gramschmidt(search_space);
-        Matrix<T> Ab_i = Matrix<T>::zero(n_dim, M);
-        for (std::size_t j = 0; j < M; j++) {
-            auto vec = orthonormal_subspace.col(j);
-            Ab_i.setCol(j, transformer(vec));
-        }
-
-        Matrix<double> B = orthonormal_subspace.transpose().conjugate() * Ab_i;
-        auto [eigenvalues, eigenvectors] = eigh(B);
-
-        std::vector<std::vector<T>> xi_n(n_roots, std::vector<T>(n_dim));
-        std::vector<double> theta_n(n_roots);
-        std::vector<bool> has_converged(n_roots, false);
-
-        // find the index of n_roots smallest eigenvalues
-        std::vector<std::pair<double, std::size_t>> eig_pairs;
-        eig_pairs.reserve(eigenvalues.size());
-        for (std::size_t i = 0; i < eigenvalues.size(); ++i) {
-            eig_pairs.emplace_back(eigenvalues[i], i);
-        }
-        // sort the eigenvalues
-        std::partial_sort(
-            eig_pairs.begin(),
-            eig_pairs.begin() + n_roots,
-            eig_pairs.end(),
-            [](auto const& a, auto const& b) {
-                return a.first < b.first;
-            });
-
-        fmt::println("davidson diagonalization iter: {:>2} ", iter + 1);
-
-        // eig_pairs[0..n_roots-1]
-        for (int n = 0; n < n_roots; ++n) {
-            theta_n[n] = eig_pairs[n].first; // the nth smallest eigenvalue
-            std::size_t idx_n = eig_pairs[n].second; // corresponding column index
-
-            std::vector<T> s = eigenvectors.col(idx_n);
-            std::vector<T> residue_n = Ab_i * s;
-            add_(residue_n, orthonormal_subspace * s, -theta_n[n]);
-            double residue_norm = norm_(residue_n);
-
-            fmt::println("  root {:>2}: theta = {:10.10f}  |residue| = {:10.10e}", n + 1, theta_n[n], residue_norm);
-
-            if (residue_norm < residue_tol) {
-                has_converged[n] = true;
-                continue;
-            }
-            else {
-                // update the search space
-                for (int i = 0; i < n_dim; ++i) {
-                    xi_n[n][i] = residue_n[i] / (theta_n[n] - diagonal[i]);
-                }
-                auto xi_norm = norm_(xi_n[n]);
-                std::transform(xi_n[n].begin(), xi_n[n].end(), xi_n[n].begin(),
-                    [xi_norm](T& val) { return val / xi_norm; });
-            }
-        }
-        search_space = orthonormal_subspace;
-        int add = std::count(has_converged.begin(), has_converged.end(), false);
-        search_space.conservativeResize(n_dim, M + add);
-
-        int new_col_index = 0;
-        for (int n = 0; n < n_roots; ++n) {
-            if (!has_converged[n]) {
-                search_space.setCol(M + new_col_index, xi_n[n]);
-                new_col_index++;
-            }
-        }
-        if (add == 0) {
-            fmt::println("davidson diagonalization converged in {:>2} iterations", iter + 1);
             return theta_n;
         }
     }
