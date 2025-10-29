@@ -1,3 +1,0 @@
-BasedOnStyle: WebKit
-ConstructorInitializerAllOnOneLineOrOnePerLine: true
-BreakBeforeBraces: Stroustrup
