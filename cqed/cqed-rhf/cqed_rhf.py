@@ -1,68 +1,67 @@
 import numpy as np
 import scipy.linalg
-from pyscf import gto, scf
 import numpy.typing as npt
+import psi4
 
 
 class CQED_RHF:
-    def __init__(self, mf: scf.hf.RHF, lambda_vec: npt.NDArray):
+    def __init__(
+        self, molecule_string, lambda_vec: npt.NDArray, psi4_options_dict: dict
+    ):
         """Initialize RHF calculator with a PySCF Mole object."""
-        self.mf_ = mf
+        self.mol_ = psi4.geometry(molecule_string)
         self.lambda_vec_ = lambda_vec
+        psi4.set_options(psi4_options_dict)
+        self.psi4_rhf_energy_, self.wfn_ = psi4.energy("scf", return_wfn=True)
+        self.mints_ = psi4.core.MintsHelper(self.wfn_.basisset())
+
         # Basic parameters
-        self.nao_ = self.mf_.mol.nao_nr()
-        self.nelec_ = self.mf_.mol.nelec
-        self.ndocc_ = min(self.nelec_)
+        self.ndocc_ = self.wfn_.nalpha()
+        self.nao_ = np.asarray(self.wfn_.Ca()).shape[0]
 
         # Initialize integral matrices
-        self.S_ = np.array(self.mf_.get_ovlp())  # Overlap matrix
-        self.H_ = np.array(self.mf_.get_hcore())  # Core Hamiltonian
-        self.eri_ = self.eri_ = np.array(
-            self.mf_.mol.intor("int2e_sph", aosym="s1")
-        )  # Electron repulsion integrals
+        self.S_ = np.asarray(self.mints_.ao_overlap())
+        self.H_ = np.asarray(self.mints_.ao_kinetic()) + np.asarray(
+            self.mints_.ao_potential()
+        )
+
+        self.eri_ = np.asarray(self.mints_.ao_eri())  # Electron repulsion integrals
 
         self.Qij_ = np.zeros((self.nao_, self.nao_))  # Quadrupole integrals
         self.ao_dipole_ = np.zeros((3, self.nao_, self.nao_))  # Dipole integrals
 
-        # Diis parameter
-        self.DIIS = False
-        self.diis_space_ = 12
-        self.diis_start_ = 2
-        self.A_ = scipy.linalg.fractional_matrix_power(
-            self.S_, -0.5
-        )  # Overlap orthogonalization matrix
-        self.F_list_ = []
-        self.DIIS_list_ = []
-
         # Nuclear repulsion energy
-        self.E_nn_ = self.mf_.energy_nuc()
-        self.mu_nuc_val_ = self._compute_mu_nuc()
-
-    def _compute_mu_nuc(self):
-        r"""
-        #\mu_{nuc} = \sum_A Z_A*R_A
-        """
-        charges = self.mf_.mol.atom_charges()
-        coords = self.mf_.mol.atom_coords()
-        return np.einsum("i,ij->j", charges, coords, optimize=True)
+        self.E_nn_ = self.mol_.nuclear_repulsion_energy()
+        self.mu_nuc_val_ = np.array(
+            [
+                self.mol_.nuclear_dipole()[0],
+                self.mol_.nuclear_dipole()[1],
+                self.mol_.nuclear_dipole()[2],
+            ],
+            dtype=float,
+        )
 
     def _compute_all_integrals(self):
         """Precompute all necessary CQED integrals before starting SCF."""
-        Q = self.mf_.mol.intor("int1e_rr_sph").reshape(
-            3, 3, self.nao_, self.nao_
-        )  # FIXME: Maybe wrong order
+        Q = np.asarray(self.mints_.ao_quadrupole())
+        Q_ao_xx = Q[0]
+        Q_ao_xy = Q[1]
+        Q_ao_xz = Q[2]
+        Q_ao_yy = Q[3]
+        Q_ao_yz = Q[4]
+        Q_ao_zz = Q[5]
 
         # -1/2 * \sum_{\zeta, \zeta'} \lambda^{\zeta} * \lambda^{\zeta'} * Q_{ij}^{\zeta\zeta'}
         self.Qij_ = -0.5 * (
-            self.lambda_vec_[0] ** 2 * Q[0, 0]
-            + self.lambda_vec_[1] ** 2 * Q[1, 1]
-            + self.lambda_vec_[2] ** 2 * Q[2, 2]
-            + 2.0 * self.lambda_vec_[0] * self.lambda_vec_[1] * Q[0, 1]
-            + 2.0 * self.lambda_vec_[0] * self.lambda_vec_[2] * Q[0, 2]
-            + 2.0 * self.lambda_vec_[1] * self.lambda_vec_[2] * Q[1, 2]
+            self.lambda_vec_[0] ** 2 * Q_ao_xx
+            + self.lambda_vec_[1] ** 2 * Q_ao_yy
+            + self.lambda_vec_[2] ** 2 * Q_ao_zz
+            + 2.0 * self.lambda_vec_[0] * self.lambda_vec_[1] * Q_ao_xy
+            + 2.0 * self.lambda_vec_[0] * self.lambda_vec_[2] * Q_ao_xz
+            + 2.0 * self.lambda_vec_[1] * self.lambda_vec_[2] * Q_ao_yz
         )
 
-        self.ao_dipole_ = self.mf_.mol.intor("int1e_r_sph", comp=3)
+        self.ao_dipole_ = np.asarray(self.mints_.ao_dipole())
         self.l_dot_mu_nuc_ = np.einsum(
             "x,x->", self.lambda_vec_, self.mu_nuc_val_, optimize=True
         )
@@ -78,6 +77,19 @@ class CQED_RHF:
             "xij,ji->x", self.ao_dipole_, dm, optimize=True
         )
 
+    def cqed_dij(self, dm: npt.NDArray, mu_exp_val: float = None):
+        r"""
+        # \sum_{\zeta} \lambda_{\zeta} * \mu_{ij}^{\zeta} * (\lambda \dot \mu_{nuc} - \lambda \dot <\mu>)
+        """
+        if mu_exp_val is None:
+            mu_exp_val = self.compute_mu_exp(dm)
+
+        dij = (
+            self.l_dot_mu_nuc_
+            - np.einsum("x,x->", self.lambda_vec_, mu_exp_val, optimize=True)
+        ) * self.l_dot_ao_dipole_
+        return dij
+
     def cqed_h1e(self, dm: npt.NDArray, mu_exp_val: float = None):
         r"""
         # H_{ij} = H_{ij}
@@ -87,37 +99,38 @@ class CQED_RHF:
         if mu_exp_val is None:
             mu_exp_val = self.compute_mu_exp(dm)
 
-        dij = (
-            self.l_dot_mu_nuc_
-            - np.einsum("x,x->", self.lambda_vec_, mu_exp_val, optimize=True)
-        ) * self.l_dot_ao_dipole_
+        dij = self.cqed_dij(dm, mu_exp_val)
         return self.H_ + self.Qij_ + dij
 
-    def cqed_veff(self, dm: npt.NDArray):
+    def scf_veff(self, dm: npt.NDArray):
         r"""
-        # G_{ij} = \sum_{kl} (2(ij|kl) - (ik|jl)) * D_{kl} +
+        # V_{ij} = \sum_{kl} (2(ij|kl) - (ik|jl)) * D_{kl}
+        """
+        return 2.0 * np.einsum("ijkl,kl->ij", self.eri_, dm, optimize=True) - np.einsum(
+            "ikjl,kl->ij", self.eri_, dm, optimize=True
+        )
+
+    def dipole_veff(self, dm: npt.NDArray):
+        r"""
         # \sum_{\zeta, \zeta'}\lambda^{\zeta} * \lambda^{\zeta'} *
         # (2\mu_{ij}^{\zeta}\mu_{kl}^{\zeta'} - \mu_{ik}^{\zeta}\mu_{jl}^{\zeta'}) * D_{kl}
         """
-        return (
-            2.0 * np.einsum("ijkl,kl->ij", self.eri_, dm, optimize=True)
-            - np.einsum("ikjl,kl->ij", self.eri_, dm, optimize=True)
-            + 2.0
-            * np.einsum(
-                "ij, kl, kl->ij",
-                self.l_dot_ao_dipole_,
-                self.l_dot_ao_dipole_,
-                dm,
-                optimize=True,
-            )
-            - np.einsum(
-                "ik, jl, kl->ij",
-                self.l_dot_ao_dipole_,
-                self.l_dot_ao_dipole_,
-                dm,
-                optimize=True,
-            )
+        return 2.0 * np.einsum(
+            "ij, kl, kl->ij",
+            self.l_dot_ao_dipole_,
+            self.l_dot_ao_dipole_,
+            dm,
+            optimize=True,
+        ) - np.einsum(
+            "ik, jl, kl->ij",
+            self.l_dot_ao_dipole_,
+            self.l_dot_ao_dipole_,
+            dm,
+            optimize=True,
         )
+
+    def cqed_veff(self, dm: npt.NDArray):
+        return self.scf_veff(dm) + self.dipole_veff(dm)
 
     def get_fock(
         self, dm: npt.NDArray, h1e: npt.NDArray = None, mu_exp_val: float = None
@@ -150,7 +163,7 @@ class CQED_RHF:
         """
         if mu_exp_val is None:
             mu_exp_val = self.compute_mu_exp(dm)
-        l_dot_mu_exp = np.einsum("x,x", self.lambda_vec_, mu_exp_val, optimize=True)
+        l_dot_mu_exp = np.einsum("x,x->", self.lambda_vec_, mu_exp_val, optimize=True)
         return (
             0.5 * self.l_dot_mu_nuc_**2
             - l_dot_mu_exp * self.l_dot_mu_nuc_
@@ -174,33 +187,6 @@ class CQED_RHF:
             + self.get_energy_dc(dm, mu_exp_val)
         )
 
-    def _compute_diis_res(self, F: npt.NDArray, D: npt.NDArray) -> npt.NDArray:
-        return self.A_ @ (F @ D @ self.S_ - self.S_ @ D @ F) @ self.A_
-
-    def apply_diis(self, F_list: list, DIIS_list: list) -> npt.NDArray:
-        """Apply DIIS to update the Fock matrix."""
-        B_dim = len(F_list) + 1
-        B = np.empty((B_dim, B_dim))
-        B[-1, :] = -1
-        B[:, -1] = -1
-        B[-1, -1] = 0
-
-        for i in range(len(F_list)):
-            for j in range(len(F_list)):
-                # Compute the inner product of residuals
-                B[i, j] = np.einsum(
-                    "ij,ij->", DIIS_list[i], DIIS_list[j], optimize=True
-                )
-
-        rhs = np.zeros((B_dim))
-        rhs[-1] = -1
-        coeff = np.linalg.solve(B, rhs)
-
-        # Update the Fock matrix as a linear combination of previous Fock matrices
-        F_new = np.einsum("i,ikl->kl", coeff[:-1], F_list)
-
-        return F_new
-
     def kernel(self, max_iter: int = 100, conv_tol: float = 1e-7) -> float:
         """Run the SCF procedure with precomputed integrals."""
         # Precompute all integrals before starting SCF
@@ -208,8 +194,12 @@ class CQED_RHF:
 
         print("Starting SCF calculation...")
         # Initial guess using core Hamiltonian
-        D = self.mf_.make_rdm1() / 2.0  # Initial density matrix
-        E_old = self.mf_.energy_tot()
+        D = np.einsum(
+            "pi,qi->pq",
+            np.asarray(self.wfn_.Ca())[:, : self.ndocc_],
+            np.asarray(self.wfn_.Ca())[:, : self.ndocc_],
+        )
+        E_old = self.psi4_rhf_energy_
 
         for iter_num in range(max_iter):
             # Build Fock matrix
@@ -217,18 +207,6 @@ class CQED_RHF:
             h1e = self.cqed_h1e(D, mu_exp_val)
             F = self.get_fock(D, h1e, mu_exp_val)
             E_total = self.get_energy_tot(h1e, F, D, mu_exp_val)
-
-            if self.DIIS:
-                diis_res = self._compute_diis_res(F, D)
-                self.F_list_.append(F)
-                self.DIIS_list_.append(diis_res)
-
-                if len(self.F_list_) > self.diis_space_:
-                    self.F_list_.pop(0)
-                    self.DIIS_list_.pop(0)
-
-                if iter_num > self.diis_start_:
-                    F = self.apply_diis(self.F_list_, self.DIIS_list_)
 
             # Get new density matrix and energy
             D_new = self.make_density(F)
@@ -242,8 +220,30 @@ class CQED_RHF:
             )
 
             if E_diff < conv_tol and D_diff < conv_tol:
+                scf_1e_e = np.einsum("pq,pq->", 2.0 * self.H_, D, optimize=True)
+                scf_2e_e = np.einsum("pq,pq->", self.scf_veff(D), D, optimize=True)
+                cqed_2e_e = np.einsum("pq,pq->", self.dipole_veff(D), D, optimize=True)
+                cqed_d_e = np.einsum(
+                    "pq,pq->",
+                    self.cqed_dij(D, mu_exp_val),
+                    D,
+                    optimize=True,
+                )
+                cqed_dc_e = self.get_energy_dc(D, mu_exp_val)
+                cqed_q_e = np.einsum("pq,pq->", 2.0 * self.Qij_, D, optimize=True)
+
+                assert np.isclose(
+                    scf_1e_e + scf_2e_e + cqed_2e_e + cqed_d_e + cqed_dc_e + cqed_q_e,
+                    E_total - self.E_nn_,
+                    atol=1e-10,
+                )
+                print(f"1E ENERGY: {scf_1e_e:.10f}")
+                print(f"2E ENERGY: {scf_2e_e:.10f}")
+                print(f"DIPOLE ENERGY: {cqed_2e_e:.10f}")
+                print(f"DIPOLE CORRECTION ENERGY: {cqed_d_e:.10f}")
+                print(f"DIPOLE CORRECTION ENERGY: {cqed_dc_e:.10f}")
+                print(f"Q ENERGY: {cqed_q_e:.10f}")
                 print("\nSCF Converged!")
-                print(f"Final SCF energy: {E_total:.10f}")
                 return E_total
 
             D = D_new
@@ -252,31 +252,35 @@ class CQED_RHF:
         raise RuntimeError("SCF did not converge within maximum iterations")
 
 
-def main():
-    # Example usage
-    mol = gto.M(
-        atom="""
-    O      0.000000000000   0.000000000000  -0.068516219320
-    H      0.000000000000  -0.790689573744   0.543701060715
-    H      0.000000000000   0.790689573744   0.543701060715
-        """,
-        basis="ccpvdz",
-        max_memory=10000,
-    )
-
-    # Compare with PySCF
-    mf_pyscf = scf.RHF(mol)
-    E_pyscf = mf_pyscf.kernel()
-    # print(f"\nPySCF energy: {E_pyscf:.10f}")
-
-    # Our implementation
-    mf = CQED_RHF(mf_pyscf, lambda_vec=np.array([0.0, 0.0, 0.05]))
-    E_our = mf.kernel()
-    print(f"Our energy:   {E_our:.10f}")
-    print(f"reference energy (PySCF): {-76.016355284146}")
-
-    print(f"Difference:   {abs(-76.016355284146 - E_our):.10f}")
-
-
 if __name__ == "__main__":
-    main()
+    import psi4
+
+    psi4.set_memory("2 GB")
+
+    h2o_options_dict = {
+        "basis": "cc-pVDZ",
+        "save_jk": True,
+        "scf_type": "pk",
+        "e_convergence": 1e-12,
+        "d_convergence": 1e-12,
+    }
+    h2o_string = """
+
+    0 1
+        O      0.000000000000   0.000000000000  -0.068516219320
+        H      0.000000000000  -0.790689573744   0.543701060715
+        H      0.000000000000   0.790689573744   0.543701060715
+    no_reorient
+    symmetry c1
+    """
+
+    lam_h2o = np.array([0.0, 0.0, 0.05])
+
+    cqed_rhf = CQED_RHF(h2o_string, lam_h2o, h2o_options_dict)
+    cqed_e = cqed_rhf.kernel()
+    ref_e = -76.016355284146
+
+    print(f"Final SCF energy (Psi4): {cqed_rhf.psi4_rhf_energy_:.10f}")
+    print(f"Final CQED_RHF energy: {cqed_e:.10f}")
+    print(f"Reference energy: {ref_e:.10f}")
+    print(f"Energy difference: {cqed_e - ref_e:.10f}")
