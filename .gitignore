@@ -6,3 +6,7 @@ __pycache__/
 
 *.sh
 *.slurm
+*.out
+*.err
+
+/tmp

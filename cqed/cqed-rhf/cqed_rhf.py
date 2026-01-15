@@ -1,55 +1,47 @@
 import numpy as np
 import scipy.linalg
 import numpy.typing as npt
-import psi4
+from pyscf import gto, scf
 
 
 class CQED_RHF:
-    def __init__(
-        self, molecule_string, lambda_vec: npt.NDArray, psi4_options_dict: dict
-    ):
+    def __init__(self, molecule: gto.Mole, lambda_vec: npt.NDArray):
         """Initialize RHF calculator with a PySCF Mole object."""
-        self.mol_ = psi4.geometry(molecule_string)
+        self.mol_ = molecule
         self.lambda_vec_ = lambda_vec
-        psi4.set_options(psi4_options_dict)
-        self.psi4_rhf_energy_, self.wfn_ = psi4.energy("scf", return_wfn=True)
-        self.mints_ = psi4.core.MintsHelper(self.wfn_.basisset())
+        mf = scf.RHF(self.mol_).run()
+        self.pyscf_rhf_energy_, self.wfn_ = mf.e_tot, mf.mo_coeff
+        # self.mints_ = psi4.core.MintsHelper(self.wfn_.basisset())
 
         # Basic parameters
-        self.ndocc_ = self.wfn_.nalpha()
-        self.nao_ = np.asarray(self.wfn_.Ca()).shape[0]
+        self.ndocc_ = mol.nelectron // 2
+        self.nao_ = self.wfn_.shape[0]
 
         # Initialize integral matrices
-        self.S_ = np.asarray(self.mints_.ao_overlap())
-        self.H_ = np.asarray(self.mints_.ao_kinetic()) + np.asarray(
-            self.mints_.ao_potential()
-        )
+        self.S_ = self.mol_.intor("int1e_ovlp")
+        self.H_ = self.mol_.intor("int1e_kin") + self.mol_.intor("int1e_nuc")
 
-        self.eri_ = np.asarray(self.mints_.ao_eri())  # Electron repulsion integrals
+        self.eri_ = self.mol_.intor("int2e", aosym="s1")  # Electron repulsion integrals
 
         self.Qij_ = np.zeros((self.nao_, self.nao_))  # Quadrupole integrals
         self.ao_dipole_ = np.zeros((3, self.nao_, self.nao_))  # Dipole integrals
 
         # Nuclear repulsion energy
-        self.E_nn_ = self.mol_.nuclear_repulsion_energy()
-        self.mu_nuc_val_ = np.array(
-            [
-                self.mol_.nuclear_dipole()[0],
-                self.mol_.nuclear_dipole()[1],
-                self.mol_.nuclear_dipole()[2],
-            ],
-            dtype=float,
+        self.E_nn_ = self.mol_.energy_nuc()
+        self.mu_nuc_val_ = np.einsum(
+            "i,ix->x", self.mol_.atom_charges(), self.mol_.atom_coords(), optimize=True
         )
 
     def _compute_all_integrals(self):
         """Precompute all necessary CQED integrals before starting SCF."""
-        Q = np.asarray(self.mints_.ao_quadrupole())
-        Q_ao_xx = Q[0]
-        Q_ao_xy = Q[1]
-        Q_ao_xz = Q[2]
-        Q_ao_yy = Q[3]
-        Q_ao_yz = Q[4]
-        Q_ao_zz = Q[5]
+        Q_ao = -1.0 * self.mol_.intor("int1e_rr").reshape(3, 3, self.nao_, self.nao_)
+
+        Q_ao_xx = Q_ao[0, 0]
+        Q_ao_xy = Q_ao[0, 1]
+        Q_ao_xz = Q_ao[0, 2]
+        Q_ao_yy = Q_ao[1, 1]
+        Q_ao_yz = Q_ao[1, 2]
+        Q_ao_zz = Q_ao[2, 2]
 
         # -1/2 * \sum_{\zeta, \zeta'} \lambda^{\zeta} * \lambda^{\zeta'} * Q_{ij}^{\zeta\zeta'}
         self.Qij_ = -0.5 * (
@@ -61,7 +53,7 @@ class CQED_RHF:
             + 2.0 * self.lambda_vec_[1] * self.lambda_vec_[2] * Q_ao_yz
         )
 
-        self.ao_dipole_ = np.asarray(self.mints_.ao_dipole())
+        self.ao_dipole_ = -1.0 * self.mol_.intor("int1e_r", comp=3)
         self.l_dot_mu_nuc_ = np.einsum(
             "x,x->", self.lambda_vec_, self.mu_nuc_val_, optimize=True
         )
@@ -196,10 +188,10 @@ class CQED_RHF:
         # Initial guess using core Hamiltonian
         D = np.einsum(
             "pi,qi->pq",
-            np.asarray(self.wfn_.Ca())[:, : self.ndocc_],
-            np.asarray(self.wfn_.Ca())[:, : self.ndocc_],
+            self.wfn_[:, : self.ndocc_],
+            self.wfn_[:, : self.ndocc_],
         )
-        E_old = self.psi4_rhf_energy_
+        E_old = self.pyscf_rhf_energy_
 
         for iter_num in range(max_iter):
             # Build Fock matrix
@@ -240,7 +232,6 @@ class CQED_RHF:
                 print(f"1E ENERGY: {scf_1e_e:.10f}")
                 print(f"2E ENERGY: {scf_2e_e:.10f}")
                 print(f"DIPOLE ENERGY: {cqed_2e_e:.10f}")
-                print(f"DIPOLE CORRECTION ENERGY: {cqed_d_e:.10f}")
                 print(f"DIPOLE CORRECTION ENERGY: {cqed_dc_e:.10f}")
                 print(f"Q ENERGY: {cqed_q_e:.10f}")
                 print("\nSCF Converged!")
@@ -253,34 +244,24 @@ class CQED_RHF:
 
 
 if __name__ == "__main__":
-    import psi4
+    from pyscf import gto, scf
 
-    psi4.set_memory("2 GB")
-
-    h2o_options_dict = {
-        "basis": "cc-pVDZ",
-        "save_jk": True,
-        "scf_type": "pk",
-        "e_convergence": 1e-12,
-        "d_convergence": 1e-12,
-    }
-    h2o_string = """
-
-    0 1
+    mol = gto.M(
+        atom="""
         O      0.000000000000   0.000000000000  -0.068516219320
         H      0.000000000000  -0.790689573744   0.543701060715
         H      0.000000000000   0.790689573744   0.543701060715
-    no_reorient
-    symmetry c1
-    """
-
+                """,
+        basis="cc-pVDZ",
+    )
+    mol.set_common_orig((0.0, 0.0, 0.0))
     lam_h2o = np.array([0.0, 0.0, 0.05])
 
-    cqed_rhf = CQED_RHF(h2o_string, lam_h2o, h2o_options_dict)
+    cqed_rhf = CQED_RHF(mol, lam_h2o)
     cqed_e = cqed_rhf.kernel()
     ref_e = -76.016355284146
 
-    print(f"Final SCF energy (Psi4): {cqed_rhf.psi4_rhf_energy_:.10f}")
+    print(f"Final SCF energy (Psi4): {cqed_rhf.pyscf_rhf_energy_:.10f}")
     print(f"Final CQED_RHF energy: {cqed_e:.10f}")
     print(f"Reference energy: {ref_e:.10f}")
     print(f"Energy difference: {cqed_e - ref_e:.10f}")

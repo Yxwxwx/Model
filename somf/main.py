@@ -84,18 +84,40 @@ from integral_helper import get_rhf_somf_integrals
 ncas, n_elec, spin, ecore, h1e, g2e, orb_sym = get_rhf_somf_integrals(
     mf, ncore, ncas, dmao=dmao
 )
+from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
-from tools import dump_cpx_FCIDUMP
+driver = DMRGDriver(scratch="./tmp", symm_type=SymmetryTypes.SGFCPX, n_threads=2)
+driver.read_fcidump(filename="DyCl6_FCIDUMP")
+idx = driver.orbital_reordering(np.abs(h1e), np.abs(g2e), method="fiedler")
+print("idx = ", idx)
 
-assert ncas == 14
-dump_cpx_FCIDUMP(
-    title + "_FCIDUMP",
-    ncas,
-    n_elec,
-    spin,
-    1,
-    orb_sym,
-    ecore,
-    h1e,
-    g2e,
-)
+# assert np.allclose(h1e, h1e.conj().T)
+# assert all(
+#     np.allclose(g2e, x)
+#     for x in [
+#         g2e,
+#         g2e.transpose(1, 0, 2, 3),
+#         g2e.transpose(0, 1, 3, 2),
+#         g2e.transpose(1, 0, 3, 2),
+#         g2e.transpose(2, 3, 0, 1),
+#         g2e.transpose(3, 2, 0, 1),
+#         g2e.transpose(2, 3, 1, 0),
+#         g2e.transpose(3, 2, 1, 0),
+#     ]
+# )
+
+
+# from tools import dump_cpx_FCIDUMP
+
+# assert ncas == 14
+# dump_cpx_FCIDUMP(
+#     title + "_FCIDUMP",
+#     ncas,
+#     n_elec,
+#     spin,
+#     1,
+#     orb_sym,
+#     ecore,
+#     h1e,
+#     g2e,
+# )
