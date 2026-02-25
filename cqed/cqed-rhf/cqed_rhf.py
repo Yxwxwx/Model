@@ -11,10 +11,9 @@ class CQED_RHF:
         self.lambda_vec_ = lambda_vec
         mf = scf.RHF(self.mol_).run()
         self.pyscf_rhf_energy_, self.wfn_ = mf.e_tot, mf.mo_coeff
-        # self.mints_ = psi4.core.MintsHelper(self.wfn_.basisset())
 
         # Basic parameters
-        self.ndocc_ = mol.nelectron // 2
+        self.ndocc_ = self.mol_.nelectron // 2
         self.nao_ = self.wfn_.shape[0]
 
         # Initialize integral matrices
@@ -31,6 +30,7 @@ class CQED_RHF:
         self.mu_nuc_val_ = np.einsum(
             "i,ix->x", self.mol_.atom_charges(), self.mol_.atom_coords(), optimize=True
         )
+        print(f"Nuclear dipole moment: {self.mu_nuc_val_}")
 
     def _compute_all_integrals(self):
         """Precompute all necessary CQED integrals before starting SCF."""
@@ -61,13 +61,17 @@ class CQED_RHF:
             "x, xij->ij", self.lambda_vec_, self.ao_dipole_, optimize=True
         )
 
+    def compute_mu_e_exp(self, dm: npt.NDArray):
+        r"""
+        # <\mu> = 2.0 * \sum_i^N_{occ} <i|\mu|i>
+        """
+        return 2.0 * np.einsum("xij,ji->x", self.ao_dipole_, dm, optimize=True)
+
     def compute_mu_exp(self, dm: npt.NDArray):
         r"""
         # <\mu> = 2.0 * \sum_i^N_{occ} <i|\mu|i> + \mu_{nuc}
         """
-        return self.mu_nuc_val_ + 2.0 * np.einsum(
-            "xij,ji->x", self.ao_dipole_, dm, optimize=True
-        )
+        return self.mu_nuc_val_ + self.compute_mu_e_exp(dm)
 
     def cqed_dij(self, dm: npt.NDArray, mu_exp_val: float = None):
         r"""
@@ -136,12 +140,15 @@ class CQED_RHF:
             h1e = self.cqed_h1e(dm, mu_exp_val)
         return h1e + self.cqed_veff(dm)
 
-    def make_density(self, fock: npt.NDArray) -> npt.NDArray:
-        """Create new density matrix and calculate electronic energy."""
-        # Solve eigenvalue problem
+    def get_coeffs(self, fock: npt.NDArray) -> npt.NDArray:
+        """Solve eigenvalue problem to get molecular orbital coefficients."""
         _, C = scipy.linalg.eigh(fock, self.S_)
+        return C
+
+    def make_density(self, mo_coeffs: npt.NDArray) -> npt.NDArray:
+        """Create new density matrix and calculate electronic energy."""
         # Form density matrix
-        C_occ = C[:, : self.ndocc_]
+        C_occ = mo_coeffs[:, : self.ndocc_]
         return np.einsum("pi,qi->pq", C_occ, C_occ, optimize=True)
 
     def get_energy_elec(
@@ -164,9 +171,9 @@ class CQED_RHF:
 
     def get_energy_tot(
         self,
-        h1e: npt.NDArray,
-        F: npt.NDArray,
-        dm: npt.NDArray,
+        h1e: npt.NDArray = None,
+        F: npt.NDArray = None,
+        dm: npt.NDArray = None,
         mu_exp_val: float = None,
     ) -> float:
         if mu_exp_val is None:
@@ -179,7 +186,9 @@ class CQED_RHF:
             + self.get_energy_dc(dm, mu_exp_val)
         )
 
-    def kernel(self, max_iter: int = 100, conv_tol: float = 1e-7) -> float:
+    def kernel(
+        self, max_iter: int = 100, conv_tol: float = 1e-7
+    ) -> tuple[float, npt.NDArray]:
         """Run the SCF procedure with precomputed integrals."""
         # Precompute all integrals before starting SCF
         self._compute_all_integrals()
@@ -200,8 +209,9 @@ class CQED_RHF:
             F = self.get_fock(D, h1e, mu_exp_val)
             E_total = self.get_energy_tot(h1e, F, D, mu_exp_val)
 
-            # Get new density matrix and energy
-            D_new = self.make_density(F)
+            # Get new density matrix and energy\
+            C = self.get_coeffs(F)
+            D_new = self.make_density(C)
             # Check convergence
             E_diff = E_total - E_old
             D_diff = np.mean((D_new - D) ** 2) ** 0.5
@@ -217,7 +227,7 @@ class CQED_RHF:
                 cqed_2e_e = np.einsum("pq,pq->", self.dipole_veff(D), D, optimize=True)
                 cqed_d_e = np.einsum(
                     "pq,pq->",
-                    self.cqed_dij(D, mu_exp_val),
+                    2.0 * self.cqed_dij(D, mu_exp_val),
                     D,
                     optimize=True,
                 )
@@ -235,12 +245,98 @@ class CQED_RHF:
                 print(f"DIPOLE CORRECTION ENERGY: {cqed_dc_e:.10f}")
                 print(f"Q ENERGY: {cqed_q_e:.10f}")
                 print("\nSCF Converged!")
-                return E_total
+                return E_total, C
 
             D = D_new
             E_old = E_total
 
-        raise RuntimeError("SCF did not converge within maximum iterations")
+        raise RuntimeWarning("SCF did not converge within maximum iterations")
+
+    def get_mo_integral(self, mo: npt.NDArray, ncore=0, ncas=None):
+        from pyscf import ao2mo
+
+        if ncas is None:
+            ncas = mo.shape[1] - ncore
+
+        orb_sym = [0] * ncas
+        ecore = self.E_nn_ + self.get_energy_dc(self.make_density(mo))
+        mo_core = mo[:, :ncore]
+        mo_cas = mo[:, ncore : ncore + ncas]
+
+        mu_eff_val = self.compute_mu_exp(self.make_density(mo))
+
+        hveff_ao = 0
+
+        if ncore != 0:
+            core_dm = self.make_density(mo_core)
+            hveff_ao = self.cqed_veff(core_dm)
+            h1e_ao = self.cqed_h1e(None, mu_eff_val)
+            ecore += np.einsum(
+                "ij,ji->", core_dm, 2.0 * h1e_ao + hveff_ao, optimize=True
+            )
+
+        # first term in h1e
+        hcore = np.einsum(
+            "ip, ij, jq -> pq", mo_cas, self.H_ + hveff_ao, mo_cas, optimize=True
+        )
+
+        # second term in h1e
+        d = np.einsum(
+            "ip, xij, jq -> xpq",
+            mo_cas,
+            self.ao_dipole_,
+            mo_cas,
+            optimize=True,
+        )
+        dpq = np.einsum(
+            "x, xpq -> pq",
+            self.lambda_vec_,
+            d,
+            optimize=True,
+        )
+        de = self.l_dot_mu_nuc_ - np.einsum(
+            "x,x->",
+            self.lambda_vec_,
+            self.compute_mu_exp(self.make_density(mo)),
+            optimize=True,
+        )
+
+        de_dpq = de * dpq
+
+        # third term in h1e
+        q = np.einsum(
+            "ip, xyij, jq->xypq",
+            mo_cas,
+            -1.0 * self.mol_.intor("int1e_rr").reshape(3, 3, self.nao_, self.nao_),
+            mo_cas,
+            optimize=True,
+        )
+
+        qpq = (
+            self.lambda_vec_[0] ** 2 * q[0, 0]
+            + self.lambda_vec_[1] ** 2 * q[1, 1]
+            + self.lambda_vec_[2] ** 2 * q[2, 2]
+            + 2.0 * self.lambda_vec_[0] * self.lambda_vec_[1] * q[0, 1]
+            + 2.0 * self.lambda_vec_[0] * self.lambda_vec_[2] * q[0, 2]
+            + 2.0 * self.lambda_vec_[1] * self.lambda_vec_[2] * q[1, 2]
+        )
+
+        # Ignore nuc dipole in J. Chem. Theory Comput. 2024, 20, 9424−9434
+        # But for simple case, we don't
+        h1e = hcore + de_dpq - 0.5 * qpq
+
+        # first term in g2e
+        eri_mo = ao2mo.kernel(self.eri_, mo_cas)
+        # second term in g2e
+        dd = np.einsum("pq, rs->pqrs", dpq, dpq, optimize=True)
+
+        g2e = eri_mo + dd
+
+        # ecore += self.get_energy_dc(dm)
+
+        n_elec = self.mol_.nelectron - 2 * ncore
+        spin = self.mol_.spin
+        return ncas, n_elec, spin, ecore, h1e, g2e, dpq, de, orb_sym
 
 
 if __name__ == "__main__":
@@ -248,20 +344,37 @@ if __name__ == "__main__":
 
     mol = gto.M(
         atom="""
-        O      0.000000000000   0.000000000000  -0.068516219320
-        H      0.000000000000  -0.790689573744   0.543701060715
-        H      0.000000000000   0.790689573744   0.543701060715
+        Li     0.0, 0.0, 0.0
+        H      0.0, 0.0, 1.4
                 """,
-        basis="cc-pVDZ",
+        basis="sto-3g",
     )
+
     mol.set_common_orig((0.0, 0.0, 0.0))
-    lam_h2o = np.array([0.0, 0.0, 0.05])
+    lam = np.array([0.0, 0.0, 0.05])
 
-    cqed_rhf = CQED_RHF(mol, lam_h2o)
-    cqed_e = cqed_rhf.kernel()
-    ref_e = -76.016355284146
+    cqed_rhf = CQED_RHF(mol, lam)
+    cqed_e, C = cqed_rhf.kernel()
 
-    print(f"Final SCF energy (Psi4): {cqed_rhf.pyscf_rhf_energy_:.10f}")
+    print(f"Final SCF energy (PySCF): {cqed_rhf.pyscf_rhf_energy_:.10f}")
     print(f"Final CQED_RHF energy: {cqed_e:.10f}")
-    print(f"Reference energy: {ref_e:.10f}")
-    print(f"Energy difference: {cqed_e - ref_e:.10f}")
+
+    ncas, n_elec, spin, ecore, h1e, g2e, dpq, de, orb_sym = cqed_rhf.get_mo_integral(
+        C, ncore=0, ncas=None
+    )
+    print("ncas:", ncas, "n_elec:", n_elec, "spin:", spin, "ecore:", ecore)
+
+    # import h5py
+
+    # with h5py.File("cqed_integrals.h5", "w") as f:
+    #     f["norb"] = ncas
+    #     f["nelec"] = n_elec
+    #     f["spin"] = spin
+    #     f["ecore"] = ecore
+
+    #     f.create_dataset("h1e", data=h1e)
+    #     f.create_dataset("h2e", data=g2e)
+
+    #     f.create_dataset("dpq", data=dpq)
+    #     f["de"] = de
+    #     f.create_dataset("orb_irreps", data=orb_sym)
