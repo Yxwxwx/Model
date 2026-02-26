@@ -1,9 +1,8 @@
 import numpy as np
-from pyblock2._pyscf.ao2mo import integrals as itg
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes, MPOAlgorithmTypes
 
 # const
-bond_dims = [250] * 4 + [500] * 4 + [10000]
+bond_dims = [250] * 4 + [500] * 4 + [2000]
 noises = [1e-4] * 4 + [1e-5] * 4 + [0]
 thrds = [1e-10] * 8
 
@@ -28,7 +27,7 @@ cqed_rhf = CQED_RHF(mol, lam)
 cqed_e, C = cqed_rhf.kernel()
 print(f"Final SCF energy (PySCF): {cqed_rhf.pyscf_rhf_energy_:.10f}")
 print(f"Final CQED_RHF energy: {cqed_e:.10f}")
-ncas, n_elec, spin, ecore, h1e, g2e, dpq, de, orb_sym = cqed_rhf.get_mo_integral(
+ncas, n_elec, spin, ecore, h1e, g2e, dpq, de, orb_sym = cqed_rhf.get_mo_integrals(
     C, ncore=0, ncas=None
 )
 print("ncas:", ncas, "n_elec:", n_elec, "spin:", spin, "ecore:", ecore)

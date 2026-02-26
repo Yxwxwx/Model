@@ -80,9 +80,6 @@ ovlp_all = neo.intor("int1e_ovlp")
 ovlp_e = ovlp_all[:nao_e, :nao_e]
 ovlp_p = ovlp_all[nao_e:, nao_e:]
 
-A_e = scipy.linalg.fractional_matrix_power(ovlp_e, -0.5)
-A_p = scipy.linalg.fractional_matrix_power(ovlp_p, -0.5)
-
 
 kin_all = neo.intor("int1e_kin")
 kin_e = kin_all[:nao_e, :nao_e]
@@ -103,15 +100,23 @@ print("electron docc:", docc)
 Np = 2
 
 
-def make_De(fock):
+def e_coeffs(fock):
     _, C = scipy.linalg.eigh(fock, ovlp_e)
-    C_occ = C[:, :docc]
+    return C
+
+
+def p_coeffs(fock):
+    _, C = scipy.linalg.eigh(fock, ovlp_p)
+    return C
+
+
+def make_De(coeffs):
+    C_occ = coeffs[:, :docc]
     return np.einsum("pi,qi->pq", C_occ, C_occ)
 
 
-def make_Dp(fock):
-    _, C = scipy.linalg.eigh(fock, ovlp_p)
-    C_occ = C[:, :Np]
+def make_Dp(coeffs):
+    C_occ = coeffs[:, :Np]
     return np.einsum("pi,qi->pq", C_occ, C_occ)
 
 
@@ -139,49 +144,78 @@ def energy(fock_e, dm_e, fock_p, dm_p):
     )
 
 
-def compute_diis_res(ovlp, fock, dm):
-    return fock @ dm @ ovlp - ovlp @ dm @ fock
+def get_mo_integrals(Ce, Cp, ncore_e=0, ncas_e=None, ncore_p=0, ncas_p=None):
+    from pyscf import ao2mo
 
+    assert ncore_p == 0, "Currently only support no frozen core for protonic part"
 
-def diis(fock_list, diis_list):
-    B_dim = len(fock_list) + 1
-    B = np.zeros((B_dim, B_dim))
-    B[-1, :] = -1
-    B[:, -1] = -1
-    B[-1, -1] = 0
+    if ncas_e is None:
+        ncas_e = Ce.shape[1] - ncore_e
+    if ncas_p is None:
+        ncas_p = Cp.shape[1] - ncore_p
 
-    for i in range(len(fock_list)):
-        for j in range(len(fock_list)):
-            # Compute the inner product of residuals
-            B[i, j] = np.einsum("ij,ij->", diis_list[i], diis_list[j], optimize=True)
+    ecore = elec.energy_nuc()
+    mo_e_core = Ce[:, :ncore_e]
+    mo_e_cas = Ce[:, ncore_e : ncore_e + ncas_e]
+    mo_p_core = Cp[:, :ncore_p]
+    mo_p_cas = Cp[:, ncore_p : ncore_p + ncas_p]
 
-    rhs = np.zeros((B_dim))
-    rhs[-1] = -1
-    coeff = np.linalg.solve(B, rhs)
+    hveff_e_ao = 0
 
-    F_new = np.einsum("i,ikl->kl", coeff[:-1], fock_list)
+    if ncore_e != 0:
+        core_e_dm = make_De(mo_e_core)
+        hveff_e_ao = 2.0 * np.einsum(
+            "ijkl,lk->ij", I_ee, core_e_dm, optimize=True
+        ) - np.einsum("ilkj,lk->ij", I_ee, core_e_dm, optimize=True)
+        ecore += np.einsum("ij,ij->", 2.0 * he + hveff_e_ao, core_e_dm, optimize=True)
 
-    return F_new
+    hcore_e = np.einsum(
+        "ip, ij, jq -> pq", mo_e_cas, he + hveff_e_ao, mo_e_cas, optimize=True
+    )
+    hcore_p = np.einsum("ip, ij, jq -> pq", mo_p_cas, hp, mo_p_cas, optimize=True)
+
+    eri_ee = ao2mo.full(I_ee, mo_e_cas)
+    eri_pp = ao2mo.full(I_pp, mo_p_cas)
+    tmp = np.einsum("ijpq,qQ->ijpQ", I_ep, mo_p_cas, optimize=True)
+    tmp = np.einsum("ijpQ,pP->ijPQ", tmp, mo_p_cas, optimize=True)
+    tmp = np.einsum("ijPQ,jJ->iJPQ", tmp, mo_e_cas, optimize=True)
+    eri_ep = np.einsum("iJPQ,iI->IJPQ", tmp, mo_e_cas, optimize=True)
+
+    n_elec = mol.nelectron - 2 * ncore_e
+    n_proton = Np - ncore_p
+    spin = mol.spin
+
+    return (
+        ncas_e,
+        ncas_p,
+        n_elec,
+        n_proton,
+        spin,
+        ecore,
+        hcore_e,
+        hcore_p,
+        eri_ee,
+        eri_pp,
+        eri_ep,
+    )
 
 
 De = mf.make_rdm1() * 0.5
 Dp = make_Dp(hp)
+Ce = np.zeros_like(De)
+Cp = np.zeros_like(Dp)
 De_old = De
 Do_old = Dp
 E_old = mf.energy_tot()
 max_iter = 100
-focke_list = []
-diise_list = []
-fockp_list = []
-diisp_list = []
-diis_space = 8
 
 for out_iter in range(max_iter):
     Fe = make_Fe(De, Dp)
     for p_iter in range(50):
         Fp = make_Fp(De, Dp)
         E_new = energy(Fe, De, Fp, Dp)
-        Dp_new = make_Dp(Fp)
+        Cp = p_coeffs(Fp)
+        Dp_new = make_Dp(Cp)
         if np.linalg.norm(Dp_new - Dp) < 1e-5:
             break
         Dp = Dp_new
@@ -190,11 +224,12 @@ for out_iter in range(max_iter):
     for e_iter in range(50):
         Fe = make_Fe(De, Dp)
         E_new = energy(Fe, De, Fp, Dp)
-        De_new = make_De(Fe)
+        Ce = e_coeffs(Fe)
+        De_new = make_De(Ce)
         if np.linalg.norm(De_new - De) < 1e-5:
             break
         De = De_new
-    
+
     E_new = energy(Fe, De, Fp, Dp)
     print(f"Outer iter {out_iter}: E = {E_new:.12f}")
 
@@ -202,3 +237,40 @@ for out_iter in range(max_iter):
         print("NEO-SCF converged!")
         break
     E_old = E_new
+(
+    ncas_e,
+    ncas_p,
+    n_elec,
+    n_proton,
+    spin,
+    ecore,
+    hcore_e,
+    hcore_p,
+    eri_ee,
+    eri_pp,
+    eri_ep,
+) = get_mo_integrals(Ce, Cp, ncore_e=0, ncas_e=None, ncore_p=0, ncas_p=None)
+print(
+    "ncas_e:",
+    ncas_e,
+    "ncas_p:",
+    ncas_p,
+    "n_elec:",
+    n_elec,
+    "n_proton:",
+    n_proton,
+    "spin:",
+    spin,
+    "ecore:",
+    ecore,
+)
+
+E = ecore
+E += 2.0 * np.einsum("ii->", hcore_e[:docc, :docc], optimize=True)
+E += np.einsum("iijj->", 2.0 * eri_ee[:docc, :docc, :docc, :docc], optimize=True)
+E -= np.einsum("ijji->", eri_ee[:docc, :docc, :docc, :docc], optimize=True)
+E += np.einsum("pp->", hcore_p[:Np, :Np], optimize=True)
+E += 0.5 * np.einsum("ppqq->", eri_pp[:Np, :Np, :Np, :Np], optimize=True)
+E -= 0.5 * np.einsum("pqqp->", eri_pp[:Np, :Np, :Np, :Np], optimize=True)
+E -= 2.0 * np.einsum("iipp->", eri_ep[:docc, :docc, :Np, :Np], optimize=True)
+print(E)

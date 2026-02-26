@@ -252,7 +252,7 @@ class CQED_RHF:
 
         raise RuntimeWarning("SCF did not converge within maximum iterations")
 
-    def get_mo_integral(self, mo: npt.NDArray, ncore=0, ncas=None):
+    def get_mo_integrals(self, mo: npt.NDArray, ncore=0, ncas=None):
         from pyscf import ao2mo
 
         if ncas is None:
@@ -359,7 +359,7 @@ if __name__ == "__main__":
     print(f"Final SCF energy (PySCF): {cqed_rhf.pyscf_rhf_energy_:.10f}")
     print(f"Final CQED_RHF energy: {cqed_e:.10f}")
 
-    ncas, n_elec, spin, ecore, h1e, g2e, dpq, de, orb_sym = cqed_rhf.get_mo_integral(
+    ncas, n_elec, spin, ecore, h1e, g2e, dpq, de, orb_sym = cqed_rhf.get_mo_integrals(
         C, ncore=0, ncas=None
     )
     print("ncas:", ncas, "n_elec:", n_elec, "spin:", spin, "ecore:", ecore)
