@@ -265,12 +265,16 @@ print(
     ecore,
 )
 
-E = ecore
-E += 2.0 * np.einsum("ii->", hcore_e[:docc, :docc], optimize=True)
-E += np.einsum("iijj->", 2.0 * eri_ee[:docc, :docc, :docc, :docc], optimize=True)
-E -= np.einsum("ijji->", eri_ee[:docc, :docc, :docc, :docc], optimize=True)
-E += np.einsum("pp->", hcore_p[:Np, :Np], optimize=True)
-E += 0.5 * np.einsum("ppqq->", eri_pp[:Np, :Np, :Np, :Np], optimize=True)
-E -= 0.5 * np.einsum("pqqp->", eri_pp[:Np, :Np, :Np, :Np], optimize=True)
-E -= 2.0 * np.einsum("iipp->", eri_ep[:docc, :docc, :Np, :Np], optimize=True)
-print(E)
+
+def test_mo_integrals():
+    E = ecore
+    E += 2.0 * np.einsum("ii->", hcore_e[:docc, :docc], optimize=True)
+    E += np.einsum("iijj->", 2.0 * eri_ee[:docc, :docc, :docc, :docc], optimize=True)
+    E -= np.einsum("ijji->", eri_ee[:docc, :docc, :docc, :docc], optimize=True)
+    E += np.einsum("pp->", hcore_p[:Np, :Np], optimize=True)
+    E += 0.5 * np.einsum("ppqq->", eri_pp[:Np, :Np, :Np, :Np], optimize=True)
+    E -= 0.5 * np.einsum("pqqp->", eri_pp[:Np, :Np, :Np, :Np], optimize=True)
+    E -= 2.0 * np.einsum("iipp->", eri_ep[:docc, :docc, :Np, :Np], optimize=True)
+    assert np.abs(E - E_new) < 1e-10, (
+        f"MO integrals test failed! E={E}, expected {E_new}"
+    )

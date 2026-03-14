@@ -32,6 +32,11 @@ class CQED_RHF:
         )
         print(f"Nuclear dipole moment: {self.mu_nuc_val_}")
 
+        # DIIS
+        self.A_ = scipy.linalg.fractional_matrix_power(self.S_, -0.5)
+        self.F_list_ = []
+        self.DIIS_list_ = []
+
     def _compute_all_integrals(self):
         """Precompute all necessary CQED integrals before starting SCF."""
         Q_ao = -1.0 * self.mol_.intor("int1e_rr").reshape(3, 3, self.nao_, self.nao_)
@@ -186,6 +191,24 @@ class CQED_RHF:
             + self.get_energy_dc(dm, mu_exp_val)
         )
 
+    def cdiis(self) -> npt.NDArray:
+        B_dim = len(self.F_list_) + 1
+        B = np.empty((B_dim, B_dim))
+        B[-1, :] = -1
+        B[:, -1] = -1
+        B[-1, -1] = 0
+
+        for i in range(len(self.F_list_)):
+            for j in range(len(self.F_list_)):
+                # Compute the inner product of residuals
+                B[i, j] = np.einsum(
+                    "ij,ij->", self.DIIS_list_[i], self.DIIS_list_[j], optimize=True
+                )
+        rhs = np.zeros((B_dim))
+        rhs[-1] = -1
+        coeff = np.linalg.solve(B, rhs)
+        return np.einsum("i,ikl->kl", coeff[:-1], self.F_list_)
+
     def kernel(
         self, max_iter: int = 100, conv_tol: float = 1e-7
     ) -> tuple[float, npt.NDArray]:
@@ -207,7 +230,20 @@ class CQED_RHF:
             mu_exp_val = self.compute_mu_exp(D)
             h1e = self.cqed_h1e(D, mu_exp_val)
             F = self.get_fock(D, h1e, mu_exp_val)
+
+            self.F_list_.append(F)
+            self.DIIS_list_.append(
+                self.A_ @ (F @ D @ self.S_ - self.S_ @ D @ F) @ self.A_
+            )
+
+            if len(self.F_list_) > 8:
+                self.F_list_.pop(0)
+                self.DIIS_list_.pop(0)
+
             E_total = self.get_energy_tot(h1e, F, D, mu_exp_val)
+
+            if iter_num >= 2:
+                F = self.cdiis()
 
             # Get new density matrix and energy\
             C = self.get_coeffs(F)
@@ -251,6 +287,32 @@ class CQED_RHF:
             E_old = E_total
 
         raise RuntimeWarning("SCF did not converge within maximum iterations")
+
+    def localize_orbitals(self, C: npt.NDArray) -> npt.NDArray:
+        from lo import pmloc, lowdin, sqrtm
+
+        occ_orbs = C[:, : self.ndocc_]
+        uocc = pmloc(self.mol_, occ_orbs)[1]
+        olmo = occ_orbs @ uocc
+
+        ova = self.S_
+        s12 = sqrtm(ova)
+        s12inv = lowdin(ova)
+
+        def scdm(coeff, overlap, aux):
+            no = coeff.shape[1]
+            ova = coeff.conj().T @ overlap @ aux
+            q, r, piv = scipy.linalg.qr(ova, pivoting=True)
+            bc = ova[:, piv[:no]]
+            ova = np.dot(bc.T, bc)
+            s12inv = lowdin(ova)
+            cnew = coeff @ bc @ s12inv
+            return cnew
+
+        v_orbs = C[:, self.ndocc_ :]
+        vlmo = scdm(v_orbs, ova, s12inv) if v_orbs.shape[1] != 0 else v_orbs
+
+        return np.hstack((olmo, vlmo))
 
     def get_mo_integrals(self, mo: npt.NDArray, ncore=0, ncas=None):
         from pyscf import ao2mo
@@ -359,6 +421,7 @@ if __name__ == "__main__":
     print(f"Final SCF energy (PySCF): {cqed_rhf.pyscf_rhf_energy_:.10f}")
     print(f"Final CQED_RHF energy: {cqed_e:.10f}")
 
+    C = cqed_rhf.localize_orbitals(C)
     ncas, n_elec, spin, ecore, h1e, g2e, dpq, de, orb_sym = cqed_rhf.get_mo_integrals(
         C, ncore=0, ncas=None
     )
