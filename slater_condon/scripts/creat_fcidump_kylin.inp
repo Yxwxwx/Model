@@ -1,0 +1,14 @@
+[info]
+coord = n2.xyz
+basis = sto-3g
+pg = c1
+
+[integral]
+
+[hf]
+
+[gugaci]
+docc = 4  # double occupied orbitals
+active = 6 # active orbitals
+nstate = 1
+dump = true # dump fcidump file

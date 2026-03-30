@@ -1,0 +1,57 @@
+# Compiled source
+*.class
+
+# Packages
+*.jar
+*.war
+*.ear
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+.cache
+Thumbs.db
+
+# IDE specific files
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Build directories
+/build/
+/target/
+
+# Dependency directories
+/node_modules/
+/vendor/
+
+# Python specific
+__pycache__/
+*.py[cod]
+
+# Environment variables
+.env
+
+# Temporary files
+*.tmp
+*.swp
+*.bak
+*.orig
+*.swo
+
+# Coverage reports
+coverage/
+*.lcov
+
+# Distribution files
+dist/
+build/
+
+# Compiled binary files
+*.o
+*.so
+*.exe
+*.dll

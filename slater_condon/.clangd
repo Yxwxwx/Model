@@ -1,0 +1,9 @@
+CompileFlags:
+  Add:
+    - -I${project_root}/external
+    - -Wno-narrowing
+    
+Diagnostics:
+  Suppress:
+    - unused-includes
+

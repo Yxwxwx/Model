@@ -1,0 +1,66 @@
+converged SCF energy = -383.383658616333
+Nuclear dipole moment: [1.24344979e-14 2.66453526e-15 0.00000000e+00]
+Starting SCF calculation...
+Iter   0: E = -383.3278961102, dE = 5.576e-02, dD = 2.884e-04
+Iter   1: E = -383.3282837800, dE = -3.877e-04, dD = 6.794e-05
+Iter   2: E = -383.3283155341, dE = -3.175e-05, dD = 2.307e-05
+Iter   3: E = -383.3283198612, dE = -4.327e-06, dD = 4.034e-06
+Iter   4: E = -383.3283202556, dE = -3.944e-07, dD = 1.550e-06
+Iter   5: E = -383.3283203370, dE = -8.139e-08, dD = 1.012e-06
+Iter   6: E = -383.3283203574, dE = -2.035e-08, dD = 3.221e-07
+Iter   7: E = -383.3283203594, dE = -1.993e-09, dD = 9.993e-08
+1E ENERGY: -1423.9302833208
+2E ENERGY: 583.2921578635
+DIPOLE ENERGY: -0.4228709826
+DIPOLE CORRECTION ENERGY: 0.0000000000
+Q ENERGY: 0.4778017585
+
+SCF Converged!
+Final SCF energy (PySCF): -383.3836586163
+Final CQED_RHF energy: -383.3283203594
+ncas: 10 n_elec: 10 spin: 0 ecore: -369.64277653364496
+
+Sweep =    0 | Direction =  forward | Bond dimension =  250 | Noise =  1.00e-04 | Dav threshold =  1.00e-10
+Time elapsed =      2.347 | E[  5] =     -13.7425120192    -13.5998889255    -13.5926760841    -13.5517621926    -13.5255146256 | DW = 5.81745e-05
+
+Sweep =    1 | Direction = backward | Bond dimension =  250 | Noise =  1.00e-04 | Dav threshold =  1.00e-10
+Time elapsed =      4.332 | E[  5] =     -13.7425745786    -13.6018538252    -13.5927789135    -13.5574667004    -13.5447152185 | DE = -1.92e-02 | DW = 3.57364e-05
+
+Sweep =    2 | Direction =  forward | Bond dimension =  250 | Noise =  1.00e-04 | Dav threshold =  1.00e-10
+Time elapsed =      5.952 | E[  5] =     -13.7425883154    -13.6018796596    -13.5928207574    -13.5574909323    -13.5447575518 | DE = -4.23e-05 | DW = 8.32803e-06
+
+Sweep =    3 | Direction = backward | Bond dimension =  250 | Noise =  1.00e-04 | Dav threshold =  1.00e-10
+Time elapsed =      8.283 | E[  5] =     -13.7425883243    -13.6018797338    -13.5928211716    -13.5574912052    -13.5447594298 | DE = -1.88e-06 | DW = 2.22299e-05
+
+Sweep =    4 | Direction =  forward | Bond dimension =  500 | Noise =  1.00e-05 | Dav threshold =  1.00e-10
+Time elapsed =     10.993 | E[  5] =     -13.7425886568    -13.6018801623    -13.5928227991    -13.5574916670    -13.5447599140 | DE = -4.84e-07 | DW = 6.28924e-07
+
+Sweep =    5 | Direction = backward | Bond dimension =  500 | Noise =  1.00e-05 | Dav threshold =  1.00e-10
+Time elapsed =     14.603 | E[  5] =     -13.7425887941    -13.6018804350    -13.5928229429    -13.5574919647    -13.5447602402 | DE = -3.26e-07 | DW = 1.26430e-06
+
+Sweep =    6 | Direction =  forward | Bond dimension =  500 | Noise =  1.00e-05 | Dav threshold =  1.00e-10
+Time elapsed =     18.185 | E[  5] =     -13.7425887963    -13.6018804354    -13.5928229452    -13.5574919651    -13.5447602410 | DE = -8.60e-10 | DW = 6.34978e-07
+
+Sweep =    7 | Direction = backward | Bond dimension =  500 | Noise =  1.00e-05 | Dav threshold =  1.00e-10
+Time elapsed =     22.235 | E[  5] =     -13.7425887963    -13.6018804354    -13.5928229453    -13.5574919651    -13.5447602411 | DE = -4.74e-11 | DW = 1.26101e-06
+
+Sweep =    8 | Direction =  forward | Bond dimension = 1000 | Noise =  0.00e+00 | Dav threshold =  1.00e-09
+Time elapsed =     27.559 | E[  5] =     -13.7425887966    -13.6018804360    -13.5928229521    -13.5574919656    -13.5447602417 | DE = -5.92e-10 | DW = 6.12993e-09
+
+Sweep =    9 | Direction = backward | Bond dimension = 1000 | Noise =  0.00e+00 | Dav threshold =  1.00e-09
+Time elapsed =     31.803 | E[  5] =     -13.7425887964    -13.6018804358    -13.5928229519    -13.5574919651    -13.5447602413 | DE = 3.18e-10 | DW = 1.76133e-08
+
+Sweep =   10 | Direction =  forward | Bond dimension = 1000 | Noise =  0.00e+00 | Dav threshold =  1.00e-09
+Time elapsed =     39.674 | E[  5] =     -13.7425888028    -13.6018804473    -13.5928229592    -13.5574919845    -13.5447602599 | DE = -1.86e-08 | DW = 6.25192e-09
+
+Sweep =   11 | Direction = backward | Bond dimension = 1000 | Noise =  0.00e+00 | Dav threshold =  1.00e-09
+Time elapsed =     48.840 | E[  5] =     -13.7425888031    -13.6018804470    -13.5928229589    -13.5574919842    -13.5447602598 | DE = 1.25e-10 | DW = 1.78867e-08
+
+Sweep =   12 | Direction =  forward | Bond dimension = 2000 | Noise =  0.00e+00 | Dav threshold =  1.00e-09
+Time elapsed =     57.487 | E[  5] =     -13.7425888028    -13.6018804473    -13.5928229592    -13.5574919842    -13.5447602599 | DE = -6.71e-11 | DW = 1.08659e-11
+
+DMRG energy = -383.3853653364608931, Spin square = 0.000000, Phonon number = 0.006459
+DMRG energy = -383.2446569809024481, Spin square = 2.000000, Phonon number = 0.007095
+DMRG energy = -383.2355994928488485, Spin square = 0.000000, Phonon number = 0.964518
+DMRG energy = -383.2002685178568413, Spin square = 2.000000, Phonon number = 0.006646
+DMRG energy = -383.1875367934997598, Spin square = 2.000000, Phonon number = 0.006565

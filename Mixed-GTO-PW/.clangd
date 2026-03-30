@@ -1,0 +1,32 @@
+CompileFlags:
+  Add: 
+  - "-Wno-unknown-warning-option"
+  - "-std=c++23" 
+  - -I${project_root}/external
+  Remove: 
+  - "-Werror"
+  - "-fmodules-ts"
+  - "-fmodule-mapper=*"
+  - "-fdeps-format=*" 
+  - "-Wno-undeclared_var_use"
+
+  Compiler: g++-13
+
+Diagnostics:
+  ClangTidy:
+    Add: ["cppcoreguidelines-*", "performance-*"]
+    Remove: ["clang-analyzer-*"]
+  
+  Suppress: 
+    - builtin_definition
+    - undeclared_var_use
+    # - mmintrin.h
+
+InlayHints:
+  Enabled: true
+  ParameterNames: true
+  DeducedTypes: true
+  Designators: true
+
+Completion:
+  AllScopes: true
