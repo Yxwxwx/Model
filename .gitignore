@@ -3,10 +3,17 @@ build/
 __pycache__/
 .vscode/
 .cache/
+tmp/
 
 *.sh
 *.slurm
 *.out
 *.err
+*.log
 
-tmp/
+*.dll
+*.lib
+*.so
+
+*.h5
+*.molden

@@ -41,10 +41,11 @@ for i in range(nbas):
         V[i0:i1, ik] = buf[:, 0]
 
 h1e = c2s.T @ (T + V)  # type: ignore
-print("cart \n", T + V)
-print("sph \n", h1e)
-# I  (p, k, q, r)
-I = np.zeros((nao, len(ks), nao, nao), dtype=np.complex128)
+# I_pkqr (p, k, q, r)
+I_pkqr = np.zeros((nao, len(ks), nao, nao), dtype=np.complex128)
+# I_rpkq (r, p, k, q)
+I_rpkq = np.zeros((nao, nao, len(ks), nao), dtype=np.complex128)
+
 import time
 
 start = time.time()
@@ -59,12 +60,26 @@ for p in range(nbas):
         for r in range(nbas):
             r0, r1 = ao_loc[r], ao_loc[r + 1]
             dr = r1 - r0
+
+            # --- 1. (p, k | q, r) ---
             shls = np.array([p, q, r], dtype=np.int32)
             buf = np.empty(dp * dq * dr, dtype=np.complex128)
 
             for ik, k in enumerate(ks):
                 lib.int2e_cart(buf, shls, atm, natm, bas, nbas, env, k)
+                I_pkqr[p0:p1, ik, q0:q1, r0:r1] = buf.reshape(dp, dq, dr)
 
-                I[p0:p1, ik, q0:q1, r0:r1] = buf.reshape(dp, dq, dr)
-I_sph = np.einsum("xa, yb, zc, xkyz -> akbc", c2s, c2s, c2s, I, optimize=True)  # type: ignore
+            # --- 2. (k, q | r, p) <==> (r, p | k, q) ---
+            shls = np.array([q, r, p], dtype=np.int32)
+            for ik, k in enumerate(ks):
+                lib.int2e_cart(buf, shls, atm, natm, bas, nbas, env, k)
+                I_rpkq[r0:r1, p0:p1, ik, q0:q1] = buf.reshape(dq, dr, dp).transpose(
+                    1, 2, 0
+                )
+
+# I_pkqr: (p, k, q, r)
+I_pkqr_sph = np.einsum("pa, qb, rc, pkqr -> akbc", c2s, c2s, c2s, I_pkqr, optimize=True)
+# I_rpkq:  (r, p, k, q)
+I_rpkq_sph = np.einsum("ra, pb, qc, rpkq -> abkc", c2s, c2s, c2s, I_rpkq, optimize=True)
+
 print("time : ", time.time() - start)
