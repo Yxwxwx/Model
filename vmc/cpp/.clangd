@@ -1,0 +1,30 @@
+CompileFlags:
+  Add:
+    - "--gcc-toolchain=/usr"
+    - "--stdlib=libstdc++"
+  Remove: 
+  - "-Werror"
+  - "-fmodules-ts"
+  - "-fmodule-mapper=*"
+  - "-fdeps-format=*" 
+  - "-Wno-undeclared_var_use"
+
+  Compiler: g++-13
+
+Diagnostics:
+  ClangTidy:
+    Add: ["cppcoreguidelines-*", "performance-*"]
+    Remove: ["clang-analyzer-*"]
+  
+  Suppress: 
+    - builtin_definition
+    - undeclared_var_use
+
+InlayHints:
+  Enabled: true
+  ParameterNames: true
+  DeducedTypes: true
+  Designators: true
+
+Completion:
+  AllScopes: true

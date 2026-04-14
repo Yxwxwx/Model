@@ -181,32 +181,38 @@ class UHF:
         F_list: list[tuple[npt.NDArray, npt.NDArray]],
         DIIS_list: list[tuple[npt.NDArray, npt.NDArray]],
     ) -> tuple[npt.NDArray, npt.NDArray]:
-        """Apply DIIS to update the Fock matrix."""
-        B_dim = len(F_list) + 1
-        Ba = np.zeros((B_dim, B_dim))
-        Bb = np.zeros((B_dim, B_dim))
-        Ba[-1, :], Bb[-1, :] = -1, -1
-        Ba[:, -1], Bb[:, -1] = -1, -1
-        Ba[-1, -1], Bb[-1, -1] = 0, 0
+        """使用统一的系数对外推 UHF 的 alpha 和 beta Fock 矩阵。"""
+        n_spaces = len(F_list)
+        B_dim = n_spaces + 1
+        B = np.zeros((B_dim, B_dim))
 
-        for i in range(len(F_list)):
-            for j in range(len(F_list)):
-                # Compute the inner product of residuals
-                Ba[i, j] = np.einsum(
-                    "ij,ij->", DIIS_list[i][0], DIIS_list[j][0], optimize=True
+        # 填充 B 矩阵
+        for i in range(n_spaces):
+            for j in range(i, n_spaces):
+                # 计算 alpha 和 beta 残差的合并内积
+                val = np.vdot(DIIS_list[i][0], DIIS_list[j][0]) + np.vdot(
+                    DIIS_list[i][1], DIIS_list[j][1]
                 )
-                Bb[i, j] = np.einsum(
-                    "ij,ij->", DIIS_list[i][1], DIIS_list[j][1], optimize=True
-                )
+                B[i, j] = B[j, i] = val.real
 
-        rhs = np.zeros((B_dim))
+        # 设置约束条件：sum(c_i) = 1
+        B[-1, :-1] = -1
+        B[:-1, -1] = -1
+        B[-1, -1] = 0
+
+        rhs = np.zeros(B_dim)
         rhs[-1] = -1
-        coeff_a = np.linalg.solve(Ba, rhs)
-        coeff_b = np.linalg.solve(Bb, rhs)
 
-        # Update the Fock matrix as a linear combination of previous Fock matrices
-        Fa_new = np.einsum("i,ikl->kl", coeff_a[:-1], [f[0] for f in F_list])
-        Fb_new = np.einsum("i,ikl->kl", coeff_b[:-1], [f[1] for f in F_list])
+        # 解线性方程组获取统一的系数
+        try:
+            coeffs = np.linalg.solve(B, rhs)[:-1]
+        except np.linalg.LinAlgError:
+            # 如果矩阵奇异，返回最近的一组 Fock
+            return F_list[-1]
+
+        # 使用统一系数对外推两个 Fock 矩阵
+        Fa_new = sum(c * F[0] for c, F in zip(coeffs, F_list))
+        Fb_new = sum(c * F[1] for c, F in zip(coeffs, F_list))
 
         return Fa_new, Fb_new
 
@@ -265,7 +271,7 @@ class UHF:
 
 def main():
     # Example usage
-    mol = gto.M(atom="O 0 0 0; O 0 0 1.2", basis="ccpvdz", spin=2)
+    mol = gto.M(atom="O 0 0 0; O 0 0 1.2", basis="ccpvTz", spin=2)
     # mol = gto.M(
     #    atom="Co 0 0 0; Cl 2.2 0 0; Cl -2.2 0 0; Cl 0 2.2 0; Cl 0 -2.2 0",
     #    charge=-2,
@@ -281,7 +287,7 @@ def main():
 
     # Our implementation
     mf = UHF(mol)
-    mf.DIIS = False
+    mf.DIIS = True
     E_our = mf.kernel()
     print(f"Our energy:   {E_our:.10f}")
     print(f"Difference:   {abs(E_pyscf - E_our):.10f}")
