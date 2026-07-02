@@ -1,14 +1,15 @@
 import numpy as np
 import h5py
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes, MPOAlgorithmTypes
+from time import time
 
 # const
-bond_dims = [250] * 4 + [500] * 4
+bond_dims = [250] * 4 + [500] * 4 + [1000]
 noises = [1e-4] * 4 + [1e-5] * 4 + [0]
-thrds = [1e-10] * 8
+thrds = [1e-9]
 
 # load integral
-filename = "neo_sz.h5"
+filename = "neo_u1.h5"
 
 with h5py.File(filename, "r") as f:
     try:
@@ -27,112 +28,102 @@ with h5py.File(filename, "r") as f:
     except KeyError as e:
         print(f"Error: Missing expected dataset in HDF5 file: {e}")
         raise
-
-driver = DMRGDriver(
-    scratch="/nvme/Yxwxwx/neo_dmrg_sz/",
-    symm_type=SymmetryTypes.SAny,
-    n_threads=16,
-    stack_mem=200 << 30,
+print(
+    f"ncas_e: {ncas_e}, ncas_p: {ncas_p} , n_elec: {n_elec} , n_proton: {n_proton}, spin: {spin}, eore: {ecore}"
 )
 
-# quantum number wrapper (U1 / n_elec, U1 / 2*Sz, U1 / n_proton)
-driver.set_symmetry_groups("U1Fermi", "U1", "U1Fermi")
+driver = DMRGDriver(
+    scratch="./tmp/neo_dmrg_u1",
+    symm_type=SymmetryTypes.SAny,
+    n_threads=4,
+    stack_mem=100 << 30,
+)
+
+start = time()  # Start MPO construction
+
+# quantum number wrapper (U1 / n_elec, U1 / n_proton)
+driver.set_symmetry_groups("U1Fermi", "U1Fermi")
 Q = driver.bw.SX
-L = ncas_e + ncas_p
 
 # [Part A] Set states and matrix representation of operators in local Hilbert space
 site_basis, site_ops = [], []
-
+L = ncas_e + ncas_p
 for k in range(L):
     if k < ncas_e:
+        # elec ->
         basis = [
-            (Q(0, 0, 0), 1),  # 0: |vac>
-            (Q(1, 1, 0), 1),  # 1: |alpha>
-            (Q(1, -1, 0), 1),  # 2: |beta>
-            (Q(2, 0, 0), 1),  # 3: |alpha beta>
+            (Q(0, 0), 1),
+            (Q(1, 0), 1),
         ]
         ops = {
-            "": np.eye(4),
-            "c": np.array(
-                [[0, 0, 0, 0], [1, 0, 0, 0], [0, 0, 0, 0], [0, 0, 1, 0]]
-            ),  # alpha+
-            "d": np.array(
-                [[0, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 1], [0, 0, 0, 0]]
-            ),  # alpha
-            "C": np.array(
-                [[0, 0, 0, 0], [0, 0, 0, 0], [1, 0, 0, 0], [0, -1, 0, 0]]
-            ),  # beta+
-            "D": np.array(
-                [[0, 0, 1, 0], [0, 0, 0, -1], [0, 0, 0, 0], [0, 0, 0, 0]]
-            ),  # beta
+            "": np.eye(2),  # identity
+            "c": np.array([[0, 0], [1, 0]]),  # e+
+            "d": np.array([[0, 1], [0, 0]]),  # e
         }
     else:
+        # proton ->
         basis = [
-            (Q(0, 0, 0), 1),  # 0: |vac>
-            (Q(0, 0, 1), 1),  # 1: |proton>
+            (Q(0, 0), 1),
+            (Q(0, 1), 1),
         ]
         ops = {
-            "": np.eye(2),
-            "E": np.array([[0, 0], [1, 0]]),  # proton+
-            "F": np.array([[0, 1], [0, 0]]),  # proton
+            "": np.eye(2),  # identity
+            "C": np.array([[0, 0], [1, 0]]),  # p+
+            "D": np.array([[0, 1], [0, 0]]),  # p
         }
 
-    site_basis.append(basis)
     site_ops.append(ops)
+    site_basis.append(basis)
 
 # [Part B] Set Hamiltonian terms in NEO model
 driver.initialize_system(
-    n_sites=L, vacuum=Q(0, 0, 0), target=Q(n_elec, spin, n_proton), hamil_init=False
+    n_sites=L,
+    vacuum=Q(0, 0),
+    target=Q(n_elec, n_proton),
+    hamil_init=False,
 )
 driver.ghamil = driver.get_custom_hamiltonian(site_basis, site_ops)
 b = driver.expr_builder()
 
+h1e[np.abs(h1e) < 1e-12] = 0.0
+h1p[np.abs(h1p) < 1e-12] = 0.0
+g2ee[np.abs(g2ee) < 1e-12] = 0.0
+g2pp[np.abs(g2pp) < 1e-12] = 0.0
+g2ep[np.abs(g2ep) < 1e-12] = 0.0
+
+
 # 1. electron-electron interaction
 for i in range(ncas_e):
     for j in range(ncas_e):
-        if abs(h1e[i, j]) > 1e-12:
-            b.add_term("cd", [i, j], h1e[i, j])
-            b.add_term("CD", [i, j], h1e[i, j])
+        b.add_term("cd", [i, j], h1e[i, j])
 
 for i in range(ncas_e):
     for j in range(ncas_e):
         for k in range(ncas_e):
             for l in range(ncas_e):
-                if abs(g2ee[i, j, k, l]) > 1e-12:
-                    coef = 0.5 * g2ee[i, j, k, l]
-                    b.add_term("ccdd", [i, k, l, j], coef)  # alpha-alpha
-                    b.add_term("CCDD", [i, k, l, j], coef)  # beta-beta
-                    b.add_term("cCDd", [i, k, l, j], coef)  # alpha-beta
-                    b.add_term("CcdD", [i, k, l, j], coef)  # beta-alpha
+                b.add_term("ccdd", [i, k, l, j], 0.5 * g2ee[i, j, k, l])
 
-print("END set electron-electron interaction")
 # 2. proton-proton interaction
 for p in range(ncas_p):
     for q in range(ncas_p):
-        if abs(h1p[p, q]) > 1e-12:
-            idx = [p + ncas_e, q + ncas_e]
-            b.add_term("EF", idx, h1p[p, q])
+        idx = [p + ncas_e, q + ncas_e]
+        b.add_term("CD", idx, h1p[p, q])
 
 for p in range(ncas_p):
     for q in range(ncas_p):
         for r in range(ncas_p):
             for s in range(ncas_p):
-                if abs(g2pp[p, q, r, s]) > 1e-12:
-                    coef = 0.5 * g2pp[p, q, r, s]
-                    idx = [p + ncas_e, r + ncas_e, s + ncas_e, q + ncas_e]
-                    b.add_term("EEFF", idx, coef)
-print("END set proton-proton interaction")
+                idx = [p + ncas_e, r + ncas_e, s + ncas_e, q + ncas_e]
+                b.add_term("CCDD", idx, 0.5 * g2pp[p, q, r, s])
+
 # 3. electron-proton interaction
 for i in range(ncas_e):
     for j in range(ncas_e):
         for p in range(ncas_p):
             for q in range(ncas_p):
-                if abs(g2ep[i, j, p, q]) > 1e-12:
-                    coef = -1.0 * g2ep[i, j, p, q]
-                    idx = [i, j, p + ncas_e, q + ncas_e]
-                    b.add_term("cdEF", idx, coef)  # alpha
-                    b.add_term("CDEF", idx, coef)  # beta
-print("END set electron-proton interaction")
+                idx = [i, j, p + ncas_e, q + ncas_e]
+                b.add_term("cdCD", idx, -1.0 * g2ep[i, j, p, q])
+
 b.add_const(ecore)
 
 # [Part C] Perform DMRG
@@ -141,15 +132,24 @@ mpo = driver.get_mpo(
     algo_type=MPOAlgorithmTypes.FastBipartite,
     iprint=1,
 )
-mps = driver.get_random_mps(tag="KET", bond_dim=250, nroots=1)
+
+end = time()  # End MPO construction
+print(f"MPO construction time: {end - start:.2f} seconds")
+
+start = time()  # Start DMRG sweeps
+mps = driver.get_random_mps(tag="KET", bond_dim=250, nroots=2)
 energy = driver.dmrg(
     mpo,
     mps,
-    tol=1e-6,
+    tol=1e-8,
     n_sweeps=20,
     bond_dims=bond_dims,
     noises=noises,
     thrds=thrds,
     iprint=2,
 )
-print("DMRG energy = %20.15f" % energy)  # −93.053328
+print("DMRG energy = \n", energy)
+# −5.849810,−5.840512
+# [-5.849818741514213, -5.840515388972684]
+end = time()  # End DMRG sweeps
+print(f"DMRG sweeps time: {end - start:.2f} seconds")

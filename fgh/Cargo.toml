@@ -1,0 +1,17 @@
+[package]
+name = "fgh"
+version = "0.1.0"
+edition = "2021"
+description = "Fourier Grid Hamiltonian vibrational solver (Rust core)"
+license = "MIT"
+
+[lib]
+name = "_fgh_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+
+[profile.release]
+lto = true
+opt-level = 3

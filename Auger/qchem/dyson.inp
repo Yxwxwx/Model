@@ -1,0 +1,17 @@
+$comment
+   IP/CVS-EE Dyson orbitals, Ne+
+$end
+
+$molecule
+   1 2
+   Ne 0 0 0
+$end
+
+$rem
+   METHOD           =  eom-ccsd
+   BASIS            =  aug-cc-pVTZ
+   SCF_CONVERGENCE  =  8
+   SYM_IGNORE       =  TRUE
+   CVS_EE_STATES    =  [1]
+   IP_STATES        =  [1]
+$end

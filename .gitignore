@@ -1,4 +1,5 @@
 .DS_Store
+.claude/
 build/
 __pycache__/
 .vscode/
@@ -17,3 +18,9 @@ tmp/
 
 *.h5
 *.molden
+# Generated / output
+*.npy
+*.png
+*.idx
+*.o
+*.a

@@ -2,6 +2,7 @@ import numpy as np
 import scipy.linalg
 import numpy.typing as npt
 from pyscf import gto, scf
+from pyscf.lib import logger
 
 
 class CQED_RHF:
@@ -10,6 +11,24 @@ class CQED_RHF:
         self.mol_ = molecule
         self.lambda_vec_ = lambda_vec
         self.mf = scf.RHF(self.mol_).run()
+
+        # Stble=OPT
+        def stable_opt_internal(mf):
+            log = logger.new_logger(mf)
+            mo1, _, stable, _ = mf.stability(return_status=True)
+            cyc = 0
+            while not stable and cyc < 10:
+                log.note("Try to optimize orbitals until stable, attempt %d" % cyc)
+                dm1 = mf.make_rdm1(mo1, mf.mo_occ)
+                mf = mf.run(dm1)
+                mo1, _, stable, _ = mf.stability(return_status=True)
+                cyc += 1
+            if not stable:
+                log.note("Stability Opt failed after %d attempts" % cyc)
+            return mf
+
+        self.mf = stable_opt_internal(self.mf)
+
         self.mo_occ_ = self.mf.mo_occ
         self.mo_energies_ = self.mf.mo_energy
         self.pyscf_rhf_energy_, self.wfn_ = self.mf.e_tot, self.mf.mo_coeff
@@ -290,32 +309,6 @@ class CQED_RHF:
 
         raise RuntimeWarning("SCF did not converge within maximum iterations")
 
-    def localize_orbitals(self, C: npt.NDArray) -> npt.NDArray:
-        from lo import pmloc, lowdin, sqrtm
-
-        occ_orbs = C[:, : self.ndocc_]
-        uocc = pmloc(self.mol_, occ_orbs)[1]
-        olmo = occ_orbs @ uocc
-
-        ova = self.S_
-        s12 = sqrtm(ova)
-        s12inv = lowdin(ova)
-
-        def scdm(coeff, overlap, aux):
-            no = coeff.shape[1]
-            ova = coeff.conj().T @ overlap @ aux
-            q, r, piv = scipy.linalg.qr(ova, pivoting=True)
-            bc = ova[:, piv[:no]]
-            ova = np.dot(bc.T, bc)
-            s12inv = lowdin(ova)
-            cnew = coeff @ bc @ s12inv
-            return cnew
-
-        v_orbs = C[:, self.ndocc_ :]
-        vlmo = scdm(v_orbs, ova, s12inv) if v_orbs.shape[1] != 0 else v_orbs
-
-        return np.hstack((olmo, vlmo))
-
     def get_mo_integrals(self, mo: npt.NDArray, ncore=0, ncas=None):
         from pyscf import ao2mo
 
@@ -323,7 +316,7 @@ class CQED_RHF:
             ncas = mo.shape[1] - ncore
 
         orb_sym = [0] * ncas
-        ecore = self.E_nn_ + self.get_energy_dc(self.make_density(mo))
+        ecore = self.E_nn_
         mo_core = mo[:, :ncore]
         mo_cas = mo[:, ncore : ncore + ncas]
 
@@ -385,9 +378,7 @@ class CQED_RHF:
             + 2.0 * self.lambda_vec_[1] * self.lambda_vec_[2] * q[1, 2]
         )
 
-        # Ignore nuc dipole in J. Chem. Theory Comput. 2024, 20, 9424−9434
-        # But for simple case, we don't
-        h1e = hcore + de_dpq - 0.5 * qpq
+        h1e = hcore - de_dpq - 0.5 * qpq
 
         # first term in g2e
         eri_mo = ao2mo.kernel(self.eri_, mo_cas)
@@ -395,8 +386,6 @@ class CQED_RHF:
         dd = np.einsum("pq, rs->pqrs", dpq, dpq, optimize=True)
 
         g2e = eri_mo + dd
-
-        # ecore += self.get_energy_dc(dm)
 
         n_elec = self.mol_.nelectron - 2 * ncore
         spin = self.mol_.spin

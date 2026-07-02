@@ -1,12 +1,20 @@
 import numpy as np
 from pyblock2.driver.core import DMRGDriver, SymmetryTypes, MPOAlgorithmTypes
+from pyblock2._pyscf import mcscf as b2mcscf
+from cqed_rhf import CQED_RHF
+from pyscf import gto
+from pyscf.tools import molden
 
 # const
-bond_dims = [250] * 4 + [500] * 4 + [1000] * 4 + [2000]
+model = "Naphtalene"
+lam = np.array([0.0, 0.05, 0.00])
+# act_idx
+act_idx = [ix - 1 for ix in [27, 31, 32, 33, 34, 35, 36, 37, 44, 48]]
+# DMRG
+bond_dims = [250] * 4 + [500] * 4 + [1000]
 noises = [1e-4] * 4 + [1e-5] * 4 + [0]
 thrds = [1e-10] * 8
 
-from pyscf import gto
 
 # molecular
 mol = gto.M(
@@ -35,9 +43,7 @@ mol = gto.M(
 )
 
 mol.set_common_orig((0.0, 0.0, 0.0))
-lam = np.array([0.0, 0.05, 0.00])
 
-from cqed_rhf import CQED_RHF
 
 # run cqed_rhf
 cqed_rhf = CQED_RHF(mol, lam)
@@ -50,19 +56,36 @@ mf.mo_occ = cqed_rhf.mo_occ_
 mf.mo_energy = cqed_rhf.mo_energies_
 mf.mo_coeff = C
 
-# C = cqed_rhf.localize_orbitals(C)
+with open(model + "_rhf.molden", "w") as f:
+    molden.header(mol, f)
+    molden.orbital_coeff(mol, f, mf.mo_coeff, ene=mf.mo_energy, occ=mf.mo_occ)
 
-from pyscf.mcscf import avas
-
-ncas, n_elec, mo = avas.avas(mf, ["C 2pz"], canonicalize=False)
-
-ncas, n_elec, spin, ecore, h1e, g2e, dpq, de, orb_sym = cqed_rhf.get_mo_integrals(
-    C, ncore=29, ncas=ncas
+lo_coeff, lo_occ, lo_energy, nactorb, nactelec = b2mcscf.sort_orbitals(
+    mol,
+    mf.mo_coeff,
+    mf.mo_occ,
+    mf.mo_energy,
+    cas_list=act_idx,
+    do_loc=True,
+    split_low=0.1,
+    split_high=1.9,
 )
 
-assert ncas == 10 and n_elec == 10
+assert nactorb == nactelec == 10
+mf.mo_coeff = lo_coeff
+mf.mo_occ = lo_occ
+mf.mo_energy = lo_energy
 
+with open(model + "_cas.molden", "w") as f:
+    molden.header(mol, f)
+    molden.orbital_coeff(mol, f, mf.mo_coeff, ene=mf.mo_energy, occ=mf.mo_occ)
+
+# Get mo integral
+ncas, n_elec, spin, ecore, h1e, g2e, dpq, de, orb_sym = cqed_rhf.get_mo_integrals(
+    mf.mo_coeff, ncore=29, ncas=nactorb
+)
 print("ncas:", ncas, "n_elec:", n_elec, "spin:", spin, "ecore:", ecore)
+
 
 # The constant terms in CQED Hamiltonian
 N_SITES_ELEC, N_SITES_PH = ncas, 1  # only one phonon mode
@@ -72,6 +95,13 @@ OMEGA = 0.160984
 
 driver = DMRGDriver(scratch="./tmp", symm_type=SymmetryTypes.SZ, n_threads=8)
 driver.initialize_system(n_sites=L, n_elec=N_ELEC, spin=spin, orb_sym=None)
+
+# fielder reorder
+idx = driver.orbital_reordering(np.abs(h1e), np.abs(g2e))
+print("reordering = ", idx)
+h1e = h1e[np.ix_(idx, idx)]
+g2e = g2e[np.ix_(idx, idx, idx, idx)]
+dpq = dpq[np.ix_(idx, idx)]
 
 
 site_basis, site_ops = [], []
@@ -151,8 +181,10 @@ for i in range(N_SITES_ELEC):
 
 # phonon terms
 b.add_term("EF", [N_SITES_ELEC, N_SITES_ELEC], OMEGA)
-b.add_term("E", [N_SITES_ELEC], -1.0 * np.sqrt(OMEGA / 2.0) * de)
-b.add_term("F", [N_SITES_ELEC], -1.0 * np.sqrt(OMEGA / 2.0) * de)
+b.add_term("E", [N_SITES_ELEC], 1.0 * np.sqrt(OMEGA / 2.0) * de)
+b.add_term("F", [N_SITES_ELEC], 1.0 * np.sqrt(OMEGA / 2.0) * de)
+
+b.add_const(0.5 * de**2 + ecore)
 
 mpo = driver.get_mpo(
     b.finalize(adjust_order=True, fermionic_ops="cdCD"),
@@ -166,11 +198,9 @@ energies = driver.dmrg(
     bond_dims=bond_dims,
     noises=noises,
     thrds=thrds,
-    dav_max_iter=30,
     iprint=1,
 )
 
-energies = [e + 0.5 * de**2 + ecore for e in energies]
 
 # expectation value of <S^2>
 skets = []

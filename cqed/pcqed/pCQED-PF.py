@@ -85,7 +85,7 @@ def analyze_polariton(E, V, el_e, n_roots, n_ph, top_k=20):
 
         print(
             f"P-{i:<3}    | {E[i]:15.8f} | {avg_n:8.4f} | {probs[max_idx]:.4f}     | "
-            f"S{alpha:<2} \u2297 |{n_val}>"
+            f"S{alpha:<2} X |{n_val}>"
         )
 
 

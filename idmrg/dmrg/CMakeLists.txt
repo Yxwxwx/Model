@@ -20,17 +20,11 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external/eigen3)
 # --------------------> fmt <--------------------
 add_subdirectory(external/fmt)
 # --------------------> hptt <--------------------
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
-# --------------------> hptt <--------------------
-# add_library(hptt STATIC IMPORTED)
-# set_target_properties(hptt PROPERTIES IMPORTED_LOCATION
-#     ${CMAKE_CURRENT_SOURCE_DIR}/external/hptt/build/libhptt.a)
-# include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external/hptt/include)
-add_subdirectory(external/hptt)
-set_target_properties(hptt PROPERTIES IMPORTED_LOCATION
-   ${CMAKE_CURRENT_SOURCE_DIR}/build/hptt/build/libhptt.a)
-# Link hptt library
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/external/hptt/include)
+# HPTT is required but not vendored. Install from:
+#   https://github.com/springer13/hptt
+# After installation, uncomment and set HPTT_ROOT:
+#   include_directories(${HPTT_ROOT}/include)
+#   target_link_libraries(IDMRG PRIVATE ${HPTT_ROOT}/lib/libhptt.a)
 
 # List all header-only sources
 set(src
@@ -41,4 +35,4 @@ set(src
 )
 
 add_executable(IDMRG main.cpp ${src})
-target_link_libraries(IDMRG PRIVATE OpenMP::OpenMP_CXX Threads::Threads fmt::fmt hptt)
+target_link_libraries(IDMRG PRIVATE OpenMP::OpenMP_CXX Threads::Threads fmt::fmt)

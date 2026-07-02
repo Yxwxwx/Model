@@ -219,9 +219,8 @@ class GHF:
             D = D_new
             E_old = E_total
 
-        print("\nSCF Converged!")
-        print(f"Final SCF energy: {E_old:.10f}")
-        raise RuntimeError("SCF did not converge within maximum iterations")
+        print("\nSCF did not converge within maximum iterations!")
+        raise RuntimeError(f"SCF did not converge after {max_iters} iterations")
 
 
 def main():

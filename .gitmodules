@@ -1,0 +1,9 @@
+[submodule "idmrg/dmrg/external/eigen3"]
+	path = idmrg/dmrg/external/eigen3
+	url = https://gitlab.com/libeigen/eigen.git
+[submodule "idmrg/dmrg/external/fmt"]
+	path = idmrg/dmrg/external/fmt
+	url = https://github.com/fmtlib/fmt.git
+[submodule "toy_fssh/fssh/ThirdParty/Eigen"]
+	path = toy_fssh/fssh/ThirdParty/Eigen
+	url = https://gitlab.com/libeigen/eigen.git

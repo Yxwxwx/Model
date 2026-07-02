@@ -1,8 +1,6 @@
 // Eigen3
 #include <Eigen/Core>
 #include <Eigen/Eigenvalues>
-// progresscpp
-#include <progresscpp/ProgressBar.hpp>
 // std
 #include <chrono>
 #include <cmath>

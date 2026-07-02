@@ -6,6 +6,8 @@
 #include "sparse_matrix.hpp"
 #include <algorithm>
 #include <chrono>
+#include <format>
+#include <iostream>
 
 namespace linalg {
 
@@ -50,8 +52,8 @@ T dot_(const std::vector<T>& v1, const std::vector<T>& v2)
     }
     return result;
 }
-template <typename T = double> // v1 = v1 * scalar
-void dot_(std::vector<T>& v1, T scalar)
+template <typename T = double>  // v1 = v1 * scalar
+void scale_(std::vector<T>& v1, T scalar)
 {
     auto len = v1.size();
     if constexpr (std::is_same_v<T, double>) {
@@ -118,7 +120,7 @@ Matrix<T> gramschmidt(const Matrix<T>& X)
 
         if (norm_d > 1e-7) {
             const T scale = T(1.0 / norm_d);
-            dot_(col_i, scale);
+            scale_(col_i, scale);
         }
         orthonormal.setCol(i, col_i);
     }
@@ -153,7 +155,7 @@ Matrix<T> gramschmidt_incremental(const Matrix<T>& X, int freeze_cols)
         // normalization
         double nrm = norm_(col_i);
         if (nrm > 1e-13) {
-            dot_(col_i, T(1.0 / nrm));
+            scale_(col_i, T(1.0 / nrm));
         }
 
         Y.setCol(i, col_i);
@@ -205,7 +207,7 @@ const std::vector<double> davidson_solver(Transformer transformer, const T* diag
         std::vector<double> theta_n(n_roots);
         std::vector<std::uint8_t> has_converged(n_roots, 0);
 
-        fmt::println("davidson diagonalization iter: {:>2} ", iter + 1);
+        std::cout << std::format("davidson diagonalization iter: {:>2}\n", iter + 1);
 
         // eig_pairs[0..n_roots-1]
         for (int n = 0; n < n_roots; ++n) {
@@ -216,7 +218,7 @@ const std::vector<double> davidson_solver(Transformer transformer, const T* diag
             add_(residue_n, orthonormal_subspace * s, -theta_n[n]);
             double residue_norm = norm_(residue_n);
 
-            fmt::println("  root {:>2}: theta = {:10.10f}  |residue| = {:10.10e}", n + 1, theta_n[n], residue_norm);
+            std::cout << std::format("  root {:>2}: theta = {:10.10f}  |residue| = {:10.10e}\n", n + 1, theta_n[n], residue_norm);
 
             if (residue_norm < residue_tol) {
                 has_converged[n] = 1;
@@ -237,7 +239,7 @@ const std::vector<double> davidson_solver(Transformer transformer, const T* diag
         }
         if (std::all_of(has_converged.begin(), has_converged.end(),
                 [](auto c) { return c; })) {
-            fmt::println("davidson diagonalization converged in {:>2} iterations",
+            std::cout << std::format("davidson diagonalization converged in {:>2} iterations\n",
                 iter + 1);
             return theta_n;
         }

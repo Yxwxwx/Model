@@ -499,4 +499,22 @@ def test_mo_integrals():
     )
 
 
+def test_spin_mo_integrals():
+    socc = 2 * docc
+    E = ecore
+    E += 1.0 * np.einsum("ii->", h1e[:socc, :socc], optimize=True)
+    E += 0.5 * np.einsum("iijj->", g2ee[:socc, :socc, :socc, :socc], optimize=True)
+    E -= 0.5 * np.einsum("ijji->", g2ee[:socc, :socc, :socc, :socc], optimize=True)
+    E += np.einsum("pp->", h1p[:Np, :Np], optimize=True)
+    E += 0.5 * np.einsum("ppqq->", g2pp[:Np, :Np, :Np, :Np], optimize=True)
+    E -= 0.5 * np.einsum("pqqp->", g2pp[:Np, :Np, :Np, :Np], optimize=True)
+    E -= 1.0 * np.einsum("iipp->", g2ep[:socc, :socc, :Np, :Np], optimize=True)
+    assert np.abs(E - E_new) < 1e-10, (
+        f"MO integrals test failed! E={E}, expected {E_new}"
+    )
+
+
+test_spin_mo_integrals()
+
+
 # test_mo_integrals()

@@ -17,7 +17,7 @@ nroots = 50
 # DMRG params
 # DMRGDriver
 driver = DMRGDriver(
-    scratch="/nvme/Yxwxwx/pcqed/" + model, n_threads=16, symm_type=SymmetryTypes.SU2
+    scratch="./tmp/" + model, n_threads=16, symm_type=SymmetryTypes.SU2
 )
 bond_dims = [250] * 4 + [500] * 5 + [1000]
 noises = [1e-5] * 5 + [1e-6] * 5 + [0]

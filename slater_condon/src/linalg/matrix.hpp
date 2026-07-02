@@ -6,11 +6,15 @@
 #define MKL_Complex16 std::complex<double>
 
 // C++ standard library
+#include <algorithm>
 #include <complex>
+#include <cstring>
 #include <random>
 // Third-party libraries
-#include <fmt/core.h>
+#include <format>
+#include <iostream>
 #include <mkl.h>
+#include <mkl_lapacke.h>
 #include <omp.h>
 
 namespace linalg {
@@ -426,28 +430,28 @@ public:
     {
         // 格式化输出实现
         for (std::size_t i = 0; i < rows(); ++i) {
-            fmt::print("["); // 行起始符
+            std::cout << "["; // 行起始符
             for (std::size_t j = 0; j < cols(); ++j) {
                 // 类型分发格式化
                 if constexpr (std::is_same_v<T, float>) {
-                    fmt::print("{:>8.4f}", (*this)(i, j));
+                    std::cout << std::format("{:>8.4f}", (*this)(i, j));
                 }
                 else if constexpr (std::is_same_v<T, double>) {
-                    fmt::print("{:>10.4f}", (*this)(i, j));
+                    std::cout << std::format("{:>10.4f}", (*this)(i, j));
                 }
                 else if constexpr (std::is_same_v<T, std::complex<float>>) {
-                    fmt::print("({:>6.2f}, {:>6.2f})", (*this)(i, j).real(),
+                    std::cout << std::format("({:>6.2f}, {:>6.2f})", (*this)(i, j).real(),
                         (*this)(i, j).imag());
                 }
                 else if constexpr (std::is_same_v<T, std::complex<double>>) {
-                    fmt::print("({:>8.4f}, {:>8.4f})", (*this)(i, j).real(),
+                    std::cout << std::format("({:>8.4f}, {:>8.4f})", (*this)(i, j).real(),
                         (*this)(i, j).imag());
                 }
                 // 列分隔符
                 if (j != cols() - 1)
-                    fmt::print(", ");
+                    std::cout << ", ";
             }
-            fmt::print("]\n"); // 行终止符
+            std::cout << "]\n"; // 行终止符
         }
     }
 
@@ -654,273 +658,73 @@ struct MatrixTypeInfo<std::complex<double>> {
     using RealType = double;
 };
 
-// 接口声明
-template <typename T>
-std::pair<std::vector<typename MatrixTypeInfo<T>::RealType>, Matrix<T>>
-eigh(const Matrix<T>& H, char uplo = 'L');
+    // ================================================================
+    // 特征值分解  (LAPACKE C 接口 — 自动管理工作空间)
+    // ================================================================
 
-template <typename T>
-std::pair<std::vector<typename MatrixTypeInfo<T>::RealType>, Matrix<T>>
-eigh(const Matrix<T>& A, const Matrix<T>& B, char uplo = 'L');
-
-// 实现部分
-namespace internal {
-
-    // 特征值计算分发器 (普通版)
-    template <typename T, typename Real = T>
-    void lapack_eigh(int n, T* a, int lda, Real* w, int& info);
-    // 特征值计算分发器 (广义版)
-    template <typename T, typename Real = T>
-    void lapack_eigh(int itype, char jobz, char uplo, int n, T* a, int lda, T* b,
-        int ldb, Real* w, int& info);
-
-    // 特化版本实现
-    //-----------------------------------------------------------------------------
-    // double 类型
-    template <>
-    inline void lapack_eigh<double>(int n, double* a, int lda, double* w,
-        int& info)
+    template <typename T>
+    std::pair<std::vector<typename MatrixTypeInfo<T>::RealType>, Matrix<T>>
+    eigh(const Matrix<T>& H)
     {
-        char jobz = 'V', uplo = 'L'; // 默认下三角
-        int lwork = -1;
-        double work_query;
-        int liwork = -1, iwork_query;
+        using Real = typename MatrixTypeInfo<T>::RealType;
+        Matrix<T> A(H);
+        const auto n = static_cast<int>(H.rows());
+        std::vector<Real> w(n);
+        int info = 0;
 
-        // 第一次调用查询工作空间
-        dsyevd_(&jobz, &uplo, &n, a, &lda, w, &work_query, &lwork, &iwork_query,
-            &liwork, &info);
+        if constexpr (std::is_same_v<T, double>) {
+            info = LAPACKE_dsyevd(LAPACK_COL_MAJOR, 'V', 'L', n,
+                                  A.data(), A.ld(), w.data());
+        } else if constexpr (std::is_same_v<T, float>) {
+            info = LAPACKE_ssyevd(LAPACK_COL_MAJOR, 'V', 'L', n,
+                                  A.data(), A.ld(), w.data());
+        } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+            info = LAPACKE_zheevd(LAPACK_COL_MAJOR, 'V', 'L', n,
+                                  A.data(), A.ld(), w.data());
+        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+            info = LAPACKE_cheevd(LAPACK_COL_MAJOR, 'V', 'L', n,
+                                  A.data(), A.ld(), w.data());
+        }
 
-        // 分配工作空间
-        lwork = static_cast<int>(work_query);
-        std::vector<double> work(lwork);
-        liwork = iwork_query;
-        std::vector<int> iwork(liwork);
-
-        // 实际计算
-        dsyevd_(&jobz, &uplo, &n, a, &lda, w, work.data(), &lwork, iwork.data(),
-            &liwork, &info);
+        if (info != 0)
+            throw std::runtime_error(std::format("eigh failed (info={})", info));
+        return {w, A};
     }
 
-    template <>
-    inline void lapack_eigh<double>(int itype, char jobz, char uplo, int n,
-        double* a, int lda, double* b, int ldb,
-        double* w, int& info)
+    // 广义特征值  A·x = λ·B·x
+    template <typename T>
+    std::pair<std::vector<typename MatrixTypeInfo<T>::RealType>, Matrix<T>>
+    eigh(const Matrix<T>& A, const Matrix<T>& B)
     {
-        int lwork = -1;
-        double work_query;
-        int liwork = -1, iwork_query;
+        using Real = typename MatrixTypeInfo<T>::RealType;
+        Matrix<T> Ac(A), Bc(B);
+        const auto n = static_cast<int>(A.rows());
+        std::vector<Real> w(n);
+        int info = 0;
 
-        // 查询工作空间
-        dsygvd_(&itype, &jobz, &uplo, &n, a, &lda, b, &ldb, w, &work_query, &lwork,
-            &iwork_query, &liwork, &info);
+        if constexpr (std::is_same_v<T, double>) {
+            info = LAPACKE_dsygvd(LAPACK_COL_MAJOR, 1, 'V', 'L', n,
+                                  Ac.data(), Ac.ld(), Bc.data(), Bc.ld(),
+                                  w.data());
+        } else if constexpr (std::is_same_v<T, float>) {
+            info = LAPACKE_ssygvd(LAPACK_COL_MAJOR, 1, 'V', 'L', n,
+                                  Ac.data(), Ac.ld(), Bc.data(), Bc.ld(),
+                                  w.data());
+        } else if constexpr (std::is_same_v<T, std::complex<double>>) {
+            info = LAPACKE_zhegvd(LAPACK_COL_MAJOR, 1, 'V', 'L', n,
+                                  Ac.data(), Ac.ld(), Bc.data(), Bc.ld(),
+                                  w.data());
+        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+            info = LAPACKE_chegvd(LAPACK_COL_MAJOR, 1, 'V', 'L', n,
+                                  Ac.data(), Ac.ld(), Bc.data(), Bc.ld(),
+                                  w.data());
+        }
 
-        lwork = static_cast<int>(work_query);
-        std::vector<double> work(lwork);
-        liwork = iwork_query;
-        std::vector<int> iwork(liwork);
-
-        dsygvd_(&itype, &jobz, &uplo, &n, a, &lda, b, &ldb, w, work.data(), &lwork,
-            iwork.data(), &liwork, &info);
+        if (info != 0)
+            throw std::runtime_error(std::format("eigh (generalized) failed (info={})", info));
+        return {w, Ac};
     }
 
-    //-----------------------------------------------------------------------------
-    // float 类型
-    template <>
-    inline void lapack_eigh<float>(int n, float* a, int lda, float* w, int& info)
-    {
-        char jobz = 'V', uplo = 'L';
-        int lwork = -1;
-        float work_query;
-        int liwork = -1, iwork_query;
+    } // namespace linalg
 
-        ssyevd_(&jobz, &uplo, &n, a, &lda, w, &work_query, &lwork, &iwork_query,
-            &liwork, &info);
-
-        lwork = static_cast<int>(work_query);
-        std::vector<float> work(lwork);
-        liwork = iwork_query;
-        std::vector<int> iwork(liwork);
-
-        ssyevd_(&jobz, &uplo, &n, a, &lda, w, work.data(), &lwork, iwork.data(),
-            &liwork, &info);
-    }
-
-    template <>
-    inline void lapack_eigh<float>(int itype, char jobz, char uplo, int n, float* a,
-        int lda, float* b, int ldb, float* w,
-        int& info)
-    {
-        int lwork = -1;
-        float work_query;
-        int liwork = -1, iwork_query;
-
-        ssygvd_(&itype, &jobz, &uplo, &n, a, &lda, b, &ldb, w, &work_query, &lwork,
-            &iwork_query, &liwork, &info);
-
-        lwork = static_cast<int>(work_query);
-        std::vector<float> work(lwork);
-        liwork = iwork_query;
-        std::vector<int> iwork(liwork);
-
-        ssygvd_(&itype, &jobz, &uplo, &n, a, &lda, b, &ldb, w, work.data(), &lwork,
-            iwork.data(), &liwork, &info);
-    }
-
-    //-----------------------------------------------------------------------------
-    // std::complex<double> 类型 (普通特征值)
-    template <>
-    inline void
-    lapack_eigh<std::complex<double>, double>(int n, std::complex<double>* a,
-        int lda, double* w, int& info)
-    {
-        char jobz = 'V', uplo = 'L';
-        int lwork = -1;
-        std::complex<double> work_query;
-        int lrwork = -1;
-        double rwork_query;
-        int liwork = -1, iwork_query;
-
-        // 第一次调用查询工作空间
-        zheevd_(&jobz, &uplo, &n, a, &lda, w, &work_query, &lwork, &rwork_query,
-            &lrwork, &iwork_query, &liwork, &info);
-
-        // 分配工作空间
-        lwork = static_cast<int>(work_query.real());
-        std::vector<std::complex<double>> work(lwork);
-        lrwork = static_cast<int>(rwork_query);
-        std::vector<double> rwork(lrwork);
-        liwork = iwork_query;
-        std::vector<int> iwork(liwork);
-
-        // 实际计算
-        zheevd_(&jobz, &uplo, &n, a, &lda, w, work.data(), &lwork, rwork.data(),
-            &lrwork, iwork.data(), &liwork, &info);
-    }
-    // std::complex<double> 类型 (广义特征值)
-    template <>
-    inline void lapack_eigh<std::complex<double>, double>(
-        int itype, char jobz, char uplo, int n, std::complex<double>* a, int lda,
-        std::complex<double>* b, int ldb, double* w, int& info)
-    {
-        int lwork = -1;
-        std::complex<double> work_query;
-        int lrwork = -1;
-        double rwork_query;
-        int liwork = -1, iwork_query;
-
-        // 查询工作空间
-        zhegvd_(&itype, &jobz, &uplo, &n, a, &lda, b, &ldb, w, &work_query, &lwork,
-            &rwork_query, &lrwork, &iwork_query, &liwork, &info);
-
-        // 分配工作空间
-        lwork = static_cast<int>(work_query.real());
-        std::vector<std::complex<double>> work(lwork);
-        lrwork = static_cast<int>(rwork_query);
-        std::vector<double> rwork(lrwork);
-        liwork = iwork_query;
-        std::vector<int> iwork(liwork);
-
-        // 实际计算
-        zhegvd_(&itype, &jobz, &uplo, &n, a, &lda, b, &ldb, w, work.data(), &lwork,
-            rwork.data(), &lrwork, iwork.data(), &liwork, &info);
-    }
-    //-----------------------------------------------------------------------------
-    // std::complex<float> 类型
-    template <>
-    inline void
-    lapack_eigh<std::complex<float>, float>(int n, std::complex<float>* a, int lda,
-        float* w, int& info)
-    {
-        char jobz = 'V', uplo = 'L';
-        int lwork = -1;
-        std::complex<float> work_query;
-        int lrwork = -1;
-        float rwork_query;
-        int liwork = -1, iwork_query;
-
-        cheevd_(&jobz, &uplo, &n, a, &lda, w, &work_query, &lwork, &rwork_query,
-            &lrwork, &iwork_query, &liwork, &info);
-
-        lwork = static_cast<int>(work_query.real());
-        std::vector<std::complex<float>> work(lwork);
-        lrwork = static_cast<int>(rwork_query);
-        std::vector<float> rwork(lrwork);
-        liwork = iwork_query;
-        std::vector<int> iwork(liwork);
-
-        cheevd_(&jobz, &uplo, &n, a, &lda, w, work.data(), &lwork, rwork.data(),
-            &lrwork, iwork.data(), &liwork, &info);
-    }
-    // std::complex<float> 类型 (广义特征值)
-    template <>
-    inline void lapack_eigh<std::complex<float>, float>(
-        int itype, char jobz, char uplo, int n, std::complex<float>* a, int lda,
-        std::complex<float>* b, int ldb, float* w, int& info)
-    {
-        int lwork = -1;
-        std::complex<float> work_query;
-        int lrwork = -1;
-        float rwork_query;
-        int liwork = -1, iwork_query;
-
-        // 查询工作空间
-        chegvd_(&itype, &jobz, &uplo, &n, a, &lda, b, &ldb, w, &work_query, &lwork,
-            &rwork_query, &lrwork, &iwork_query, &liwork, &info);
-
-        // 分配工作空间
-        lwork = static_cast<int>(work_query.real());
-        std::vector<std::complex<float>> work(lwork);
-        lrwork = static_cast<int>(rwork_query);
-        std::vector<float> rwork(lrwork);
-        liwork = iwork_query;
-        std::vector<int> iwork(liwork);
-
-        // 实际计算
-        chegvd_(&itype, &jobz, &uplo, &n, a, &lda, b, &ldb, w, work.data(), &lwork,
-            rwork.data(), &lrwork, iwork.data(), &liwork, &info);
-    }
-
-} // namespace internal
-
-template <typename T>
-std::pair<std::vector<typename MatrixTypeInfo<T>::RealType>, Matrix<T>>
-eigh(const Matrix<T>& H, char uplo)
-{
-    using Real = typename MatrixTypeInfo<T>::RealType;
-
-    Matrix<T> A(H);
-    const int n = static_cast<int>(H.rows());
-    std::vector<Real> eigenvalues(n); // 使用萃取后的类型
-
-    int info = 0;
-    internal::lapack_eigh<T, Real>( // 显式指定模板参数
-        n, A.data(), A.ld(), eigenvalues.data(), info);
-
-    return { eigenvalues, A };
-}
-
-// 广义版本同理修改
-template <typename T>
-std::pair<std::vector<typename MatrixTypeInfo<T>::RealType>, Matrix<T>>
-eigh(const Matrix<T>& A, const Matrix<T>& B, char uplo)
-{
-    using Real = typename MatrixTypeInfo<T>::RealType;
-    Matrix<T> A_copy(A), B_copy(B);
-    std::vector<Real> eigenvalues(A.rows());
-
-    int info = 0;
-    internal::lapack_eigh<T, Real>(1, // itype=1对应A*x = λ*B*x
-        'V', // 计算特征向量
-        uplo, static_cast<int>(A.rows()),
-        A_copy.data(), A_copy.ld(), B_copy.data(),
-        B_copy.ld(), eigenvalues.data(), info);
-
-    if (info != 0) {
-        throw std::runtime_error("LAPACK eigh failed with code " + std::to_string(info));
-    }
-    return { eigenvalues, A_copy };
-}
-
-} // namespace linalg
-
-#endif // MATRIX_HPP
+    #endif // MATRIX_HPP

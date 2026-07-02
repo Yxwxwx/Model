@@ -19,7 +19,7 @@ def get_random_restricted_mps(
     n_inact=None,
     n_exter=None,
     n_act=None,
-    core_sz=None,  # 【新增】限制核心区域的 2*Sz (例如 1 代表 alpha, -1 代表 beta)
+    core_sz=1,  # 【新增】限制核心区域的 2*Sz (例如 1 代表 alpha, -1 代表 beta)
 ):
     bw = self.bw
     if target is None:
@@ -157,6 +157,7 @@ if __name__ == "__main__":
     from pyblock2.driver.core import DMRGDriver, SymmetryTypes
 
     DMRGDriver.get_random_restricted_mps = get_random_restricted_mps
+
     bond_dims = [250] * 4 + [500] * 4
     noises = [1e-4] * 4 + [1e-5] * 4 + [0]
     thrds = [1e-10] * 8

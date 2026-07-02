@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "dvr"
+version = "0.1.0"
+description = "Discrete Variable Representation vibrational solver (Rust core)"
+requires-python = ">=3.10"
+dependencies = ["numpy", "scipy"]
+
+[project.optional-dependencies]
+dev = ["pytest", "pypes", "pyvci"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "pydvr"
+module-name = "dvr._dvr_core"
