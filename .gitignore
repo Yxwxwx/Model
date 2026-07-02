@@ -1,6 +1,7 @@
 .DS_Store
 .claude/
 build/
+target/
 __pycache__/
 .vscode/
 .cache/
