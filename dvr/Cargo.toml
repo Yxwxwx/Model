@@ -1,5 +1,5 @@
 [package]
-name = "dvr"
+name = "dvr-rs"
 version = "0.1.0"
 edition = "2021"
 description = "Discrete Variable Representation vibrational solver (Rust core)"
@@ -10,7 +10,13 @@ name = "_dvr_core"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3 = { version = "0.29.0", features = ["extension-module"] }
+numpy = "0.29"
+rayon = "1.10"
+faer = "0.24.4"
+
+[profile.dev.package.faer]
+opt-level = 3
 
 [profile.release]
 lto = true
