@@ -1,32 +1,27 @@
 CompileFlags:
-  Add: 
-  - "-Wno-unknown-warning-option"
-  - "-std=c++23" 
-  - -I${project_root}/external
-  Remove: 
-  - "-Werror"
-  - "-fmodules-ts"
-  - "-fmodule-mapper=*"
-  - "-fdeps-format=*" 
-  - "-Wno-undeclared_var_use"
+  CompilationDatabase: build
+  Compiler: /software/Applications/gcc/13.3.0/bin/c++
+  Remove:
+    - -Winvalid-pch
+    - -include
 
-  Compiler: g++-13
-
-Diagnostics:
-  ClangTidy:
-    Add: ["cppcoreguidelines-*", "performance-*"]
-    Remove: ["clang-analyzer-*"]
-  
-  Suppress: 
-    - builtin_definition
-    - undeclared_var_use
-    # - mmintrin.h
-
-InlayHints:
-  Enabled: true
-  ParameterNames: true
-  DeducedTypes: true
-  Designators: true
-
-Completion:
-  AllScopes: true
+---
+If:
+  PathMatch: .*src/gpu/.*\.(cu|cuh|h|hpp)
+CompileFlags:
+  Compiler: clang++
+  Remove:
+    - -forward-unknown-to-host-compiler
+    - -gencode
+    - "arch=compute_*,code=sm_*"
+    - -Xcudafe
+    - "--diag_suppress=*"
+    - --expt-relaxed-constexpr
+    - --expt-extended-lambda
+    - "-Xcompiler=*"
+    - -x
+  Add:
+    - -xcuda
+    - --cuda-path=/usr/local/cuda
+    - --cuda-gpu-arch=sm_89
+    - -Wno-unknown-cuda-version

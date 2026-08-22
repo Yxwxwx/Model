@@ -1,0 +1,14 @@
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.cache/
+coverage.xml
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+benchmark/results/*.json
+benchmark/results/*.pt
+benchmark/data/*.FCIDUMP

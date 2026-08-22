@@ -1,0 +1,4 @@
+include uv.lock
+include ARCHITECTURE.md
+include main.py
+recursive-include benchmark *.md *.py

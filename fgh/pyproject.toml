@@ -1,18 +1,18 @@
-[build-system]
-requires = ["maturin>=1.7,<2.0"]
-build-backend = "maturin"
-
 [project]
 name = "fgh"
 version = "0.1.0"
-description = "Fourier Grid Hamiltonian vibrational solver (Rust core)"
-requires-python = ">=3.10"
-dependencies = ["numpy", "scipy"]
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pyscf"
+]
 
-[project.optional-dependencies]
-dev = ["pytest", "pyscf"]
+[build-system]
+requires = ["uv_build>=0.12.5,<0.13"]
+build-backend = "uv_build"
 
-[tool.maturin]
-features = ["pyo3/extension-module"]
-python-source = "pyfgh"
-module-name = "fgh._fgh_core"
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
