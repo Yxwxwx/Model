@@ -4,6 +4,8 @@ from pyscf.data.nist import MP_ME
 
 from fgh.fgh3d import FGH3D
 from fgh.pes import build_pes_3d
+from fgh.analysis import harmonic_projection, print_harmonic_projection
+
 
 # ============================================================
 # Literature parameters
@@ -189,15 +191,18 @@ def main():
         pes[center, center, center + 1] - 2.0 * v0 + pes[center, center, center - 1]
     ) / dz**2
 
-    def force_constant_to_cm(k):
-        omega = np.sqrt(k / PROTON_MASS)
-        return omega * HARTREE_TO_CM
+    omega_x = np.sqrt(kx / PROTON_MASS)
+
+    omega_y = np.sqrt(ky / PROTON_MASS)
+
+    omega_z = np.sqrt(kz / PROTON_MASS)
 
     print()
     print("Local harmonic analysis")
-    print(f"kx = {kx:.10f} Eh/bohr^2  omega_x = {force_constant_to_cm(kx):.3f} cm^-1")
-    print(f"ky = {ky:.10f} Eh/bohr^2  omega_y = {force_constant_to_cm(ky):.3f} cm^-1")
-    print(f"kz = {kz:.10f} Eh/bohr^2  omega_z = {force_constant_to_cm(kz):.3f} cm^-1")
+
+    print(f"kx = {kx:.10f} Eh/bohr^2  omega_x = {omega_x * HARTREE_TO_CM:.3f} cm^-1")
+    print(f"ky = {ky:.10f} Eh/bohr^2  omega_y = {omega_y * HARTREE_TO_CM:.3f} cm^-1")
+    print(f"kz = {kz:.10f} Eh/bohr^2  omega_z = {omega_z * HARTREE_TO_CM:.3f} cm^-1")
 
     # PES symmetry sanity check
     print()
@@ -259,6 +264,42 @@ def main():
             f"{result.energies[state]:22.12f}"
             f"{excitation_hartree[state]:18.10f}"
             f"{excitation_cm[state]:20.3f}"
+        )
+
+    print()
+    print("=" * 72)
+    print("Harmonic projection analysis")
+    print("=" * 72)
+
+    for state in range(result.nstates):
+        projection = harmonic_projection(
+            result=result,
+            state=state,
+            mass=PROTON_MASS,
+            omegas=(
+                omega_x,
+                omega_y,
+                omega_z,
+            ),
+            center=(
+                0.0,
+                0.0,
+                0.0,
+            ),
+            nmax=(
+                6,
+                6,
+                3,
+            ),
+        )
+
+        print()
+        print(f"State {state}, dE = {excitation_cm[state]:.3f} cm^-1")
+
+        print_harmonic_projection(
+            projection,
+            threshold=0.01,
+            max_components=8,
         )
 
     # ========================================================

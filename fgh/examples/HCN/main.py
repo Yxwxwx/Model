@@ -1,48 +1,29 @@
 import numpy as np
-from pyscf import cc, gto, scf
+
+from pyscf import fci, gto, scf
 from pyscf.data.nist import MP_ME
 
+from fgh.analysis import harmonic_projection, print_harmonic_projection
 from fgh.fgh3d import FGH3D
-from fgh.helper import second_order_scf, stable_opt_internal
 from fgh.pes import build_pes_3d
-
-# ============================================================
-# Unit conversion
-# ============================================================
-
-ANG_TO_BOHR = 1.8897261254578281
-HARTREE_TO_CM = 219474.63136320
 
 
 # ============================================================
 # Literature parameters
 # ============================================================
 
-# HCN geometry from the NEO-MRCI paper:
-#
-# H ---- C ---- N
-#
-# H: z = 0
-# C: z = 1.065 Angstrom
-# N: z = 2.218 Angstrom
-#
-# Therefore:
-#
-# R(C-H) = 1.065 Angstrom
-# R(C-N) = 1.153 Angstrom
-
-R_CH_ANG = 1.065
-R_CN_ANG = 1.153
-
-R_CH = R_CH_ANG * ANG_TO_BOHR
-R_CN = R_CN_ANG * ANG_TO_BOHR
+# He-He distance = 3.40151 bohr ~= 1.8 Angstrom
+R_HE = 3.40151 / 2.0
 
 PROTON_MASS = MP_ME
 
-BASIS = "cc-pvtz"
+BASIS = "6-31g"
 
-REFERENCE_BEND_CM = 632.0
-REFERENCE_STRETCH_CM = 3152.0
+HARTREE_TO_CM = 219474.63136320
+
+# NEO-MRCI paper:
+# FCI/6-31G + 3D FGH fundamental proton bend
+REFERENCE_BEND_CM = 771.0
 
 
 # ============================================================
@@ -56,86 +37,51 @@ def electronic_energy(
     z: float,
 ) -> float:
     """
-    Born-Oppenheimer CCSD energy of HCN for a fixed
+    Born-Oppenheimer FCI energy of HeHHe+ for a fixed
     proton coordinate (x, y, z).
 
+    Molecular axis: x
     All coordinates are in bohr.
     """
 
     mol = gto.M(
         atom=[
-            (
-                "H",
-                (x, y, z),
-            ),
-            (
-                "C",
-                (0.0, 0.0, R_CH),
-            ),
-            (
-                "N",
-                (0.0, 0.0, R_CH + R_CN),
-            ),
+            ("He", (-R_HE, 0.0, 0.0)),
+            ("He", (+R_HE, 0.0, 0.0)),
+            ("H", (x, y, z)),
         ],
         basis=BASIS,
-        charge=0,
+        charge=1,
         spin=0,
         unit="Bohr",
         verbose=0,
     )
 
-    # ========================================================
     # RHF
-    # ========================================================
-
     mf = scf.RHF(mol)
-
     mf.conv_tol = 1e-12
     mf.max_cycle = 100
-
     mf.kernel()
 
-    # ========================================================
-    # Second-order SCF fallback
-    # ========================================================
-
     if not mf.converged:
-        mf = second_order_scf(mf)
+        mf = mf.newton()
+        mf.conv_tol = 1e-12
+        mf.max_cycle = 100
+        mf.kernel()
 
     if not mf.converged:
         raise RuntimeError(
             f"RHF failed at proton position ({x:.8f}, {y:.8f}, {z:.8f}) bohr"
         )
 
-    # ========================================================
-    # Internal stability optimization
-    # ========================================================
+    # FCI
+    cisolver = fci.FCI(mf)
+    cisolver.conv_tol = 1e-12
+    cisolver.max_cycle = 100
 
-    mf = stable_opt_internal(mf)
+    energy, _ = cisolver.kernel()
 
-    if not mf.converged:
-        raise RuntimeError(
-            "Stable RHF optimization failed at proton position "
-            f"({x:.8f}, {y:.8f}, {z:.8f}) bohr"
-        )
-
-    # ========================================================
-    # CCSD
-    # ========================================================
-
-    mycc = cc.CCSD(mf)
-
-    mycc.conv_tol = 1e-9
-    mycc.max_cycle = 100
-
-    mycc.kernel()
-
-    if not mycc.converged:
-        raise RuntimeError(
-            f"CCSD failed at proton position ({x:.8f}, {y:.8f}, {z:.8f}) bohr"
-        )
-
-    return float(mycc.e_tot)
+    return float(energy)
 
 
 # ============================================================
@@ -145,51 +91,35 @@ def electronic_energy(
 
 def make_grid(
     n: int,
-    minimum_angstrom: float,
-    maximum_angstrom: float,
+    half_width: float,
 ) -> np.ndarray:
     """
-    Construct a uniform Fourier grid.
-
-    The literature provides the physical grid range in Angstrom,
-    while the FGH implementation uses atomic units.
-
-    endpoint=False is required for the periodic Fourier grid.
+    Uniform periodic Fourier grid centered at zero.
     """
+    dx = 2.0 * half_width / n
 
-    minimum = minimum_angstrom * ANG_TO_BOHR
-    maximum = maximum_angstrom * ANG_TO_BOHR
-
-    return np.linspace(
-        minimum,
-        maximum,
-        n,
-        endpoint=False,
-    )
+    return (np.arange(n) - n // 2) * dx
 
 
 # ============================================================
-# FGH calculation parameters
+# Calculation parameters
 # ============================================================
-
-# The article specifies the spatial range but does not state
-# the number of grid points in the main text.
-#
-# 64^3 is used here as the production grid and should be
-# checked for convergence if high precision is required.
 
 NGRID = 64
 
-GRID_MIN_ANG = -0.7935
-GRID_MAX_ANG = +0.8464
+X_HALF_WIDTH = 1.20
+Y_HALF_WIDTH = 1.20
+Z_HALF_WIDTH = 1.20
 
-# Need enough states to reach the fundamental stretch,
-# which occurs above several bend overtone/combination states.
-NSTATES = 10
+# Four states are enough for:
+#
+#   ground
+#   bend doublet
+#   next excitation
+#
+NSTATES = 4
 
-CHECKPOINT = "hcn_ccsd_ccpvtz_pes.npz"
-
-CHECKPOINT_INTERVAL = 1000
+CHECKPOINT = "hehhe_fci_6-31g_pes.npz"
 
 
 # ============================================================
@@ -204,65 +134,65 @@ def main():
 
     x = make_grid(
         NGRID,
-        GRID_MIN_ANG,
-        GRID_MAX_ANG,
+        X_HALF_WIDTH,
     )
 
     y = make_grid(
         NGRID,
-        GRID_MIN_ANG,
-        GRID_MAX_ANG,
+        Y_HALF_WIDTH,
     )
 
     z = make_grid(
         NGRID,
-        GRID_MIN_ANG,
-        GRID_MAX_ANG,
+        Z_HALF_WIDTH,
     )
 
     print("=" * 72)
-    print("HCN : CCSD / cc-pVTZ + 3D FGH")
+    print("HeHHe+ : FCI / 6-31G + 3D FGH")
     print("=" * 72)
 
     print()
     print("Physical parameters")
 
-    print(f"  R(C-H)       = {R_CH_ANG:.6f} Angstrom")
-
-    print(f"  R(C-N)       = {R_CN_ANG:.6f} Angstrom")
+    print(f"  R(He-He)     = {2.0 * R_HE:.8f} bohr")
 
     print(f"  basis        = {BASIS}")
 
     print(f"  proton mass  = {PROTON_MASS:.8f} m_e")
 
     print()
+    print("Coordinate convention")
+
+    print("  x             = molecular axis / proton stretch")
+
+    print("  y, z          = degenerate transverse proton bends")
+
+    print()
     print("FGH grid")
 
-    print(f"  shape        = {len(x)} x {len(y)} x {len(z)}")
+    print(f"  shape         = {len(x)} x {len(y)} x {len(z)}")
 
-    print(f"  total points = {len(x) * len(y) * len(z)}")
+    print(f"  total points  = {len(x) * len(y) * len(z)}")
 
-    print(f"  literature range = [{GRID_MIN_ANG:+.4f}, {GRID_MAX_ANG:+.4f}) Angstrom")
+    print(f"  dx            = {x[1] - x[0]:.8f} bohr")
 
-    print(f"  dx           = {x[1] - x[0]:.8f} bohr")
+    print(f"  dy            = {y[1] - y[0]:.8f} bohr")
 
-    print(f"  dy           = {y[1] - y[0]:.8f} bohr")
+    print(f"  dz            = {z[1] - z[0]:.8f} bohr")
 
-    print(f"  dz           = {z[1] - z[0]:.8f} bohr")
+    print(f"  x range       = [{x[0]:+.6f}, {x[-1]:+.6f}] bohr")
 
-    print(f"  x range      = [{x[0]:+.6f}, {x[-1]:+.6f}] bohr")
+    print(f"  y range       = [{y[0]:+.6f}, {y[-1]:+.6f}] bohr")
 
-    print(f"  y range      = [{y[0]:+.6f}, {y[-1]:+.6f}] bohr")
-
-    print(f"  z range      = [{z[0]:+.6f}, {z[-1]:+.6f}] bohr")
+    print(f"  z range       = [{z[0]:+.6f}, {z[-1]:+.6f}] bohr")
 
     # ========================================================
-    # Generate electronic PES
+    # PES
     # ========================================================
 
     print()
     print("=" * 72)
-    print("Generating CCSD / cc-pVTZ potential-energy surface")
+    print("Generating electronic FCI potential-energy surface")
     print("=" * 72)
     print()
 
@@ -272,7 +202,7 @@ def main():
         z=z,
         energy_function=electronic_energy,
         checkpoint=CHECKPOINT,
-        checkpoint_interval=CHECKPOINT_INTERVAL,
+        checkpoint_interval=1000,
         verbose=True,
     )
 
@@ -284,43 +214,131 @@ def main():
     print(f"  Vmax = {np.max(pes):.12f} Eh")
 
     # ========================================================
-    # PES symmetry check
-    # ========================================================
-    #
-    # HCN is linear along z.
-    #
-    # The PES must therefore be cylindrically symmetric:
-    #
-    #     V(x, 0, z) = V(0, y, z)
-    #
-    # for x = y.
-    #
-    # Unlike HeHHe+, there is NO symmetry under z -> -z.
+    # Local harmonic analysis
     # ========================================================
 
-    iz0 = int(np.argmin(np.abs(z)))
+    center = NGRID // 2
 
-    ix0 = int(np.argmin(np.abs(x)))
+    v0 = pes[
+        center,
+        center,
+        center,
+    ]
 
-    iy0 = int(np.argmin(np.abs(y)))
+    dx = x[1] - x[0]
+    dy = y[1] - y[0]
+    dz = z[1] - z[0]
 
-    # Pick equivalent transverse displacements one step away.
-    ix1 = min(
-        ix0 + 1,
-        len(x) - 1,
+    kx = (
+        pes[
+            center + 1,
+            center,
+            center,
+        ]
+        - 2.0 * v0
+        + pes[
+            center - 1,
+            center,
+            center,
+        ]
+    ) / dx**2
+
+    ky = (
+        pes[
+            center,
+            center + 1,
+            center,
+        ]
+        - 2.0 * v0
+        + pes[
+            center,
+            center - 1,
+            center,
+        ]
+    ) / dy**2
+
+    kz = (
+        pes[
+            center,
+            center,
+            center + 1,
+        ]
+        - 2.0 * v0
+        + pes[
+            center,
+            center,
+            center - 1,
+        ]
+    ) / dz**2
+
+    omega_x = np.sqrt(kx / PROTON_MASS)
+
+    omega_y = np.sqrt(ky / PROTON_MASS)
+
+    omega_z = np.sqrt(kz / PROTON_MASS)
+
+    print()
+    print("Local harmonic analysis")
+
+    print(
+        f"  stretch x : "
+        f"k = {kx:.10f} Eh/bohr^2   "
+        f"omega = "
+        f"{omega_x * HARTREE_TO_CM:.3f} cm^-1"
     )
 
-    iy1 = min(
-        iy0 + 1,
-        len(y) - 1,
+    print(
+        f"  bend y    : "
+        f"k = {ky:.10f} Eh/bohr^2   "
+        f"omega = "
+        f"{omega_y * HARTREE_TO_CM:.3f} cm^-1"
     )
 
-    transverse_difference = pes[ix1, iy0, iz0] - pes[ix0, iy1, iz0]
+    print(
+        f"  bend z    : "
+        f"k = {kz:.10f} Eh/bohr^2   "
+        f"omega = "
+        f"{omega_z * HARTREE_TO_CM:.3f} cm^-1"
+    )
+
+    # ========================================================
+    # PES symmetry
+    # ========================================================
 
     print()
     print("PES symmetry check")
 
-    print(f"  V(+x,0,z0) - V(0,+y,z0) = {transverse_difference:+.6e} Eh")
+    inversion_error = (
+        pes[
+            center + 1,
+            center,
+            center,
+        ]
+        - pes[
+            center - 1,
+            center,
+            center,
+        ]
+    )
+
+    transverse_error = (
+        pes[
+            center,
+            center + 1,
+            center,
+        ]
+        - pes[
+            center,
+            center,
+            center + 1,
+        ]
+    )
+
+    print(f"  V(+x,0,0) - V(-x,0,0) = {inversion_error:+.6e} Eh")
+
+    print(f"  V(0,+y,0) - V(0,0,+z) = {transverse_error:+.6e} Eh")
+
+    print(f"  V(0,0,0) = {v0:.12f} Eh")
 
     # ========================================================
     # 3D FGH
@@ -352,12 +370,6 @@ def main():
 
     # ========================================================
     # Transition-coordinate analysis
-    # ========================================================
-    #
-    # Molecular axis = z
-    #
-    # x/y matrix elements identify fundamental bends.
-    # z matrix elements identify the fundamental stretch.
     # ========================================================
 
     tx = np.zeros(result.nstates)
@@ -395,7 +407,7 @@ def main():
         )
 
     # ========================================================
-    # Results
+    # Eigenstate energies
     # ========================================================
 
     print("FGH eigenstates")
@@ -423,23 +435,110 @@ def main():
         )
 
     # ========================================================
+    # Harmonic projection
+    # ========================================================
+
+    print()
+    print("=" * 72)
+    print("Harmonic projection analysis")
+    print("=" * 72)
+
+    print()
+    print("Harmonic labels use the present Cartesian convention:")
+    print("  (nx, ny, nz)")
+    print("  nx = proton stretch quanta")
+    print("  ny, nz = transverse bend quanta")
+
+    for state in range(result.nstates):
+        projection = harmonic_projection(
+            result=result,
+            state=state,
+            mass=PROTON_MASS,
+            omegas=(
+                omega_x,
+                omega_y,
+                omega_z,
+            ),
+            center=(
+                0.0,
+                0.0,
+                0.0,
+            ),
+            nmax=(
+                4,
+                6,
+                6,
+            ),
+        )
+
+        print()
+        print(f"State {state}, dE = {excitation_cm[state]:.3f} cm^-1")
+
+        print_harmonic_projection(
+            projection,
+            threshold=0.01,
+            max_components=8,
+        )
+
+        # ----------------------------------------------------
+        # Useful symmetry/manifold weights
+        # ----------------------------------------------------
+
+        weights = {
+            component.quanta: component.weight for component in projection.components
+        }
+
+        ground_weight = weights.get(
+            (0, 0, 0),
+            0.0,
+        )
+
+        stretch_weight = weights.get(
+            (1, 0, 0),
+            0.0,
+        )
+
+        bend_weight = weights.get(
+            (0, 1, 0),
+            0.0,
+        ) + weights.get(
+            (0, 0, 1),
+            0.0,
+        )
+
+        bend_overtone_weight = (
+            weights.get(
+                (0, 2, 0),
+                0.0,
+            )
+            + weights.get(
+                (0, 1, 1),
+                0.0,
+            )
+            + weights.get(
+                (0, 0, 2),
+                0.0,
+            )
+        )
+
+        print()
+        print("  Selected manifold weights")
+        print(f"    ground |000>         : {ground_weight:.6f}")
+        print(f"    stretch fundamental  : {stretch_weight:.6f}")
+        print(f"    bend fundamental     : {bend_weight:.6f}")
+        print(f"    bend N=2 manifold    : {bend_overtone_weight:.6f}")
+
+    # ========================================================
     # Literature comparison
     # ========================================================
 
-    # For linear HCN the lowest two excited states should be
-    # the degenerate proton bend modes.
+    bend_1 = excitation_cm[1]
 
-    calculated_bend_1 = excitation_cm[1]
+    bend_2 = excitation_cm[2]
 
-    calculated_bend_2 = excitation_cm[2]
+    calculated_bend = 0.5 * (bend_1 + bend_2)
 
-    bend_average = 0.5 * (calculated_bend_1 + calculated_bend_2)
-
-    # The fundamental stretch should have by far the largest
-    # transition matrix element along the molecular z-axis.
-    stretch_state = int(np.argmax(tz[1:])) + 1
-
-    calculated_stretch = excitation_cm[stretch_state]
+    error = calculated_bend - REFERENCE_BEND_CM
 
     print()
     print("=" * 72)
@@ -450,23 +549,9 @@ def main():
     print("Fundamental proton bend")
 
     print(f"  Literature FGH : {REFERENCE_BEND_CM:.1f} cm^-1")
-
-    print(f"  This calculation: {bend_average:.3f} cm^-1")
-
-    print(f"  Degenerate pair : {calculated_bend_1:.3f}, {calculated_bend_2:.3f} cm^-1")
-
-    print(f"  Error           : {bend_average - REFERENCE_BEND_CM:+.3f} cm^-1")
-
-    print()
-    print("Fundamental proton stretch")
-
-    print(f"  Assigned state  : {stretch_state}")
-
-    print(f"  Literature FGH : {REFERENCE_STRETCH_CM:.1f} cm^-1")
-
-    print(f"  This calculation: {calculated_stretch:.3f} cm^-1")
-
-    print(f"  Error           : {calculated_stretch - REFERENCE_STRETCH_CM:+.3f} cm^-1")
+    print(f"  This calculation: {calculated_bend:.3f} cm^-1")
+    print(f"  Degenerate pair : {bend_1:.3f}, {bend_2:.3f} cm^-1")
+    print(f"  Error           : {error:+.3f} cm^-1")
 
 
 if __name__ == "__main__":
