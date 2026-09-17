@@ -38,7 +38,6 @@ class TEBD:
 
         # Hamiltonian
         self.H = H
-        self.cyclic = H.cyclic
         self._ham_norm = H.mean_norm()
 
         # estimated accumulated Trotter error
@@ -166,21 +165,8 @@ class TEBD:
 
             if self.L % 2 == 1:
                 self._pt.left_canonize_site(self.L - 2)
-                if self.cyclic:
-                    sites = (self.L - 1, 0)
-                    U = self._get_gate_from_ham(dt_frac, sites)
-                    self._pt.right_canonize_site(1)
-                    self._pt.gate_split_(
-                        U, where=sites, absorb="left", **self.split_opts
-                    )
 
         elif direction == "left":
-            if self.cyclic and (self.L % 2 == 0):
-                sites = (self.L - 1, 0)
-                U = self._get_gate_from_ham(dt_frac, sites)
-                self._pt.right_canonize_site(1)
-                self._pt.gate_split_(U, where=sites, absorb="left", **self.split_opts)
-
             final_site_ind = 1
             # Apply odd gates:
             #
