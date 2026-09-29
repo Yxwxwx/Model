@@ -1,0 +1,15 @@
+build/
+docs/*
+
+.vscode/
+.DS_Store/
+.cache/
+
+.claude/
+.agents/
+.codex/
+
+__pycache__/
+*.pyc
+
+/ref/

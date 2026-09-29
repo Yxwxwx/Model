@@ -2,6 +2,9 @@ import libMixedInt as lib
 from pyscf import gto
 import numpy as np
 
+# Set to "high" to use long-double arithmetic.
+precision = "low"
+
 mol = gto.M(atom="Ne 0 0 0", basis="unc-cc-pvdz")
 
 atm = mol._atm
@@ -9,10 +12,10 @@ natm = mol.natm
 bas = mol._bas
 nbas = mol.nbas
 env = mol._env
-nao = mol.nao_cart()
-ao_loc = mol.ao_loc_nr(cart=True)
+nao = mol.nao_nr()
+ao_loc = mol.ao_loc_nr()
 ks = [np.array([1.0, 0.0, 0.0], dtype=np.float64)]
-c2s = mol.cart2sph_coeff()
+# Spherical kernels include angular normalization in C++.
 
 print("atm : \n", atm)
 print("natm : ", natm)
@@ -28,7 +31,7 @@ for i in range(nbas):
     shls = np.array([i])
     for ik, k in enumerate(ks):
         buf = np.zeros((di, 1), dtype=np.complex128)
-        lib.int1e_kin_cart(buf, shls, atm, natm, bas, nbas, env, k)
+        lib.int1e_kin_sph(buf, shls, atm, natm, bas, nbas, env, k, precision=precision)
         T[i0:i1, ik] = buf[:, 0]
 
 for i in range(nbas):
@@ -37,14 +40,14 @@ for i in range(nbas):
     shls = np.array([i])
     for ik, k in enumerate(ks):
         buf = np.zeros((di, 1), dtype=np.complex128)
-        lib.int1e_nuc_cart(buf, shls, atm, natm, bas, nbas, env, k)
+        lib.int1e_nuc_sph(buf, shls, atm, natm, bas, nbas, env, k, precision=precision)
         V[i0:i1, ik] = buf[:, 0]
 
-h1e = c2s.T @ (T + V)  # type: ignore
-# I_pkqr (p, k, q, r)
-I_pkqr = np.zeros((nao, len(ks), nao, nao), dtype=np.complex128)
-# I_rpkq (r, p, k, q)
-I_rpkq = np.zeros((nao, nao, len(ks), nao), dtype=np.complex128)
+h1e = T + V
+# I_pkqr_sph (p, k, q, r)
+I_pkqr_sph = np.zeros((nao, len(ks), nao, nao), dtype=np.complex128)
+# I_rpkq_sph (r, p, k, q)
+I_rpkq_sph = np.zeros((nao, nao, len(ks), nao), dtype=np.complex128)
 
 import time
 
@@ -66,20 +69,15 @@ for p in range(nbas):
             buf = np.empty(dp * dq * dr, dtype=np.complex128)
 
             for ik, k in enumerate(ks):
-                lib.int2e_cart(buf, shls, atm, natm, bas, nbas, env, k)
-                I_pkqr[p0:p1, ik, q0:q1, r0:r1] = buf.reshape(dp, dq, dr)
+                lib.int2e_sph(buf, shls, atm, natm, bas, nbas, env, k, precision=precision)
+                I_pkqr_sph[p0:p1, ik, q0:q1, r0:r1] = buf.reshape(dp, dq, dr)
 
             # --- 2. (k, q | r, p) <==> (r, p | k, q) ---
             shls = np.array([q, r, p], dtype=np.int32)
             for ik, k in enumerate(ks):
-                lib.int2e_cart(buf, shls, atm, natm, bas, nbas, env, k)
-                I_rpkq[r0:r1, p0:p1, ik, q0:q1] = buf.reshape(dq, dr, dp).transpose(
+                lib.int2e_sph(buf, shls, atm, natm, bas, nbas, env, k, precision=precision)
+                I_rpkq_sph[r0:r1, p0:p1, ik, q0:q1] = buf.reshape(dq, dr, dp).transpose(
                     1, 2, 0
                 )
-
-# I_pkqr: (p, k, q, r)
-I_pkqr_sph = np.einsum("pa, qb, rc, pkqr -> akbc", c2s, c2s, c2s, I_pkqr, optimize=True)
-# I_rpkq:  (r, p, k, q)
-I_rpkq_sph = np.einsum("ra, pb, qc, rpkq -> abkc", c2s, c2s, c2s, I_rpkq, optimize=True)
 
 print("time : ", time.time() - start)
